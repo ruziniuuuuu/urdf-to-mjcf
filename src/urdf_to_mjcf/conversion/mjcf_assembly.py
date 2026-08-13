@@ -48,6 +48,7 @@ def add_compiler(root: ET.Element) -> None:
         "angle": "radian",
         "meshdir": ".",
         "balanceinertia": "true",
+        "inertiafromgeom": "false",
     }
 
     element = ET.Element("compiler", attrib=attrib)

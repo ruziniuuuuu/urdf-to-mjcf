@@ -377,6 +377,7 @@ def test_add_compiler_replaces_existing_element() -> None:
     assert compiler.attrib["angle"] == "radian"
     assert compiler.attrib["meshdir"] == "."
     assert compiler.attrib["balanceinertia"] == "true"
+    assert compiler.attrib["inertiafromgeom"] == "false"
 
 
 def test_add_default_builds_visual_and_collision_defaults() -> None:
