@@ -273,6 +273,73 @@ def test_convert_cli_overrides_disable_freejoint_and_floor(tmp_dir: Path) -> Non
     assert root.find(".//geom[@name='floor']") is None
 
 
+def test_convert_preserves_urdf_inertials_without_mesh_inference(tmp_dir: Path) -> None:
+    urdf_path = tmp_dir / "description" / "robot.urdf"
+    urdf_path.parent.mkdir()
+    urdf_path.write_text(
+        """
+        <robot name="inertial_test">
+          <link name="base_link">
+            <inertial>
+              <origin xyz="0.1 0.2 0.3" rpy="0 0 1.5707963267948966" />
+              <mass value="5" />
+              <inertia ixx="2" ixy="0.1" ixz="0.2" iyy="3" iyz="0.3" izz="4" />
+            </inertial>
+          </link>
+          <link name="camera_link">
+            <visual><geometry><box size="0.1 0.1 0.1" /></geometry></visual>
+            <collision><geometry><box size="0.1 0.1 0.1" /></geometry></collision>
+          </link>
+          <link name="zero_mass_link">
+            <inertial>
+              <mass value="0" />
+              <inertia ixx="0" ixy="0" ixz="0" iyy="0" iyz="0" izz="0" />
+            </inertial>
+          </link>
+          <joint name="camera_joint" type="fixed">
+            <parent link="base_link" />
+            <child link="camera_link" />
+          </joint>
+          <joint name="zero_mass_joint" type="fixed">
+            <parent link="camera_link" />
+            <child link="zero_mass_link" />
+          </joint>
+        </robot>
+        """.strip()
+    )
+    out_path = tmp_dir / "mjcf" / "robot.xml"
+
+    convert_urdf_to_mjcf(
+        urdf_path,
+        out_path,
+        freejoint=False,
+        add_floor=False,
+        run_mesh_postprocess=False,
+    )
+
+    root = ET.parse(out_path).getroot()
+    compiler = root.find("compiler")
+    base_inertial = root.find(".//body[@name='base_link']/inertial")
+    zero_mass_inertial = root.find(".//body[@name='zero_mass_link']/inertial")
+
+    assert compiler is not None
+    assert compiler.attrib["inertiafromgeom"] == "false"
+    assert base_inertial is not None
+    assert base_inertial.attrib["pos"] == "0.1 0.2 0.3"
+    assert base_inertial.attrib["mass"] == "5"
+    assert "quat" not in base_inertial.attrib
+    assert "diaginertia" not in base_inertial.attrib
+    assert [float(value) for value in base_inertial.attrib["fullinertia"].split()] == pytest.approx(
+        [3.0, 2.0, 4.0, -0.1, -0.3, 0.2]
+    )
+    assert zero_mass_inertial is None
+
+    model = mujoco.MjModel.from_xml_path(str(out_path))
+    camera_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "camera_link")
+    assert model.body_mass.sum() == pytest.approx(5.0)
+    assert model.body_mass[camera_id] == 0.0
+
+
 def test_default_output_path() -> None:
     """When no output path is given, output goes to output_mjcf/robot.xml."""
     robot_dir = EXAMPLES_DIR / "agilex-piper"

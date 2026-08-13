@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import math
 import re
 import xml.etree.ElementTree as ET
 from collections.abc import Mapping
@@ -19,6 +20,7 @@ from urdf_to_mjcf.core.model import JointMetadata
 logger = logging.getLogger(__name__)
 
 JOINT_METADATA_ATTRS = ("stiffness", "actuatorfrcrange", "margin", "armature", "damping", "frictionloss")
+INERTIA_ATTRIBUTES = ("ixx", "iyy", "izz", "ixy", "ixz", "iyz")
 
 
 def apply_joint_metadata(attrib: dict[str, str], metadata: JointMetadata | None) -> None:
@@ -32,6 +34,59 @@ def apply_joint_metadata(attrib: dict[str, str], metadata: JointMetadata | None)
             attrib[name] = " ".join(str(item) for item in value)
         else:
             attrib[name] = str(value)
+
+
+def _build_inertial(link: ET.Element) -> ET.Element | None:
+    """Build a mass-preserving MJCF inertial expressed in the link frame."""
+    inertial = link.find("inertial")
+    if inertial is None:
+        return None
+
+    mass = inertial.find("mass")
+    if mass is not None and float(mass.attrib.get("value", "0")) == 0:
+        return None
+
+    attributes = {"pos": "0 0 0"}
+    if mass is not None:
+        attributes["mass"] = mass.attrib.get("value", "0")
+
+    origin = inertial.find("origin")
+    rpy = np.zeros(3)
+    if origin is not None:
+        attributes["pos"] = origin.attrib.get("xyz", "0 0 0")
+        rpy = np.fromstring(origin.attrib.get("rpy", "0 0 0"), sep=" ")
+
+    inertia = inertial.find("inertia")
+    if inertia is not None:
+        if not np.any(rpy):
+            attributes["fullinertia"] = " ".join(inertia.attrib.get(name, "0") for name in INERTIA_ATTRIBUTES)
+        else:
+            roll, pitch, yaw = rpy
+            cr, sr = math.cos(roll), math.sin(roll)
+            cp, sp = math.cos(pitch), math.sin(pitch)
+            cy, sy = math.cos(yaw), math.sin(yaw)
+            rotation = np.array(
+                [
+                    [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
+                    [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
+                    [-sp, cp * sr, cp * cr],
+                ]
+            )
+            ixx, iyy, izz, ixy, ixz, iyz = (float(inertia.attrib.get(name, "0")) for name in INERTIA_ATTRIBUTES)
+            tensor = np.array(
+                [
+                    [ixx, ixy, ixz],
+                    [ixy, iyy, iyz],
+                    [ixz, iyz, izz],
+                ]
+            )
+            tensor = rotation @ tensor @ rotation.T
+            attributes["fullinertia"] = " ".join(
+                format(value, ".17g")
+                for value in (tensor[0, 0], tensor[1, 1], tensor[2, 2], tensor[0, 1], tensor[0, 2], tensor[1, 2])
+            )
+
+    return ET.Element("inertial", attrib=attributes)
 
 
 def build_robot_body_tree(
@@ -234,37 +289,9 @@ def build_robot_body_tree(
                     )
                 )
 
-        inertial = link.find("inertial")
+        inertial = _build_inertial(link)
         if inertial is not None:
-            inertial_elem = ET.Element("inertial")
-            origin_inertial = inertial.find("origin")
-            if origin_inertial is not None:
-                inertial_elem.attrib["pos"] = origin_inertial.attrib.get("xyz", "0 0 0")
-                rpy = origin_inertial.attrib.get("rpy", "0 0 0")
-                if rpy != "0 0 0":
-                    inertial_elem.attrib["quat"] = rpy_to_quat(rpy)
-            else:
-                inertial_elem.attrib["pos"] = "0 0 0"
-                inertial_elem.attrib["quat"] = "1 0 0 0"
-            mass_elem = inertial.find("mass")
-            if mass_elem is not None:
-                mass = mass_elem.attrib.get("value", "0")
-                inertial_elem.attrib["mass"] = str(max(float(mass), 1e-6))
-            inertia_elem = inertial.find("inertia")
-            if inertia_elem is not None:
-                ixx = float(inertia_elem.attrib.get("ixx", "0"))
-                ixy = float(inertia_elem.attrib.get("ixy", "0"))
-                ixz = float(inertia_elem.attrib.get("ixz", "0"))
-                iyy = float(inertia_elem.attrib.get("iyy", "0"))
-                iyz = float(inertia_elem.attrib.get("iyz", "0"))
-                izz = float(inertia_elem.attrib.get("izz", "0"))
-                if abs(ixy) > 1e-6 or abs(ixz) > 1e-6 or abs(iyz) > 1e-6:
-                    logger.info(
-                        "Warning: off-diagonal inertia terms for link '%s' are nonzero and will be ignored.",
-                        link_name,
-                    )
-                inertial_elem.attrib["diaginertia"] = f"{max(ixx, 1e-9)} {max(iyy, 1e-9)} {max(izz, 1e-9)}"
-            body.append(inertial_elem)
+            body.append(inertial)
 
         collisions = link.findall("collision")
         for idx, collision in enumerate(collisions):
