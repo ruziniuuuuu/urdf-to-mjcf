@@ -40,9 +40,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/discoverse-dev/urdf-to-mjcf"
-Repository = "https://github.com/discoverse-dev/urdf-to-mjcf"
-Issues = "https://github.com/discoverse-dev/urdf-to-mjcf/issues"
+Homepage = "https://github.com/ruziniuuuuu/urdf-to-mjcf"
+Repository = "https://github.com/ruziniuuuuu/urdf-to-mjcf"
+Issues = "https://github.com/ruziniuuuuu/urdf-to-mjcf/issues"
+Upstream = "https://github.com/discoverse-dev/urdf-to-mjcf"
 
 [project.scripts]
 urdf-to-mjcf = "urdf_to_mjcf.cli.convert:main"

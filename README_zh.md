@@ -4,6 +4,9 @@ URDF到MJCF转换工具，支持STL、OBJ、DAE、GLB格式，自动识别urdf�
 
 [English Document](./README.md)
 
+本仓库为 [github.com/ruziniuuuuu/urdf-to-mjcf](https://github.com/ruziniuuuuu/urdf-to-mjcf)，
+fork 自 [discoverse-dev/urdf-to-mjcf](https://github.com/discoverse-dev/urdf-to-mjcf)。
+
 <img src="assets/family.png" alt="piper" style="width: 95%;" />
 
 ## 🚀 安装
@@ -20,10 +23,12 @@ pip install urdf-to-mjcf
 uv pip install urdf-to-mjcf
 ```
 
+PyPI 上的包来自上游仓库，不包含本 fork 的改动。需要本仓库的改动请从源码安装。
+
 ### 从源码安装
 
 ```bash
-git clone https://github.com/discoverse-dev/urdf-to-mjcf.git
+git clone https://github.com/ruziniuuuuu/urdf-to-mjcf.git
 cd urdf-to-mjcf
 uv pip install -e .
 ```

@@ -4,6 +4,9 @@ URDF to MJCF conversion tool with support for STL, OBJ, DAE, GLB formats, automa
 
 [中文文档](./README_zh.md)
 
+This repository is [github.com/ruziniuuuuu/urdf-to-mjcf](https://github.com/ruziniuuuuu/urdf-to-mjcf),
+a fork of [discoverse-dev/urdf-to-mjcf](https://github.com/discoverse-dev/urdf-to-mjcf).
+
 <img src="assets/family.png" alt="piper" style="width: 95%;" />
 
 ## 🚀 Installation
@@ -20,10 +23,13 @@ Or with `uv`:
 uv pip install urdf-to-mjcf
 ```
 
+PyPI serves the upstream project, not this fork. Install from source to get the
+changes made here.
+
 ### Install from Source
 
 ```bash
-git clone https://github.com/discoverse-dev/urdf-to-mjcf.git
+git clone https://github.com/ruziniuuuuu/urdf-to-mjcf.git
 cd urdf-to-mjcf
 uv pip install -e .
 ```
