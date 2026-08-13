@@ -233,11 +233,7 @@ def add_assets(root: ET.Element, materials: dict[str, str], mtl_materials: dict[
     # Add MTL materials first (they take priority)
     if mtl_materials:
         for material in mtl_materials.values():
-            material_attrib = {
-                "name": material.name,
-                # "specular": material.mjcf_specular(),
-                # "shininess": material.mjcf_shininess(),
-            }
+            material_attrib = {"name": material.name}
 
             if material.map_Kd is not None:
                 # Create texture asset for diffuse map

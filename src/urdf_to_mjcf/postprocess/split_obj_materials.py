@@ -3,7 +3,6 @@
 import argparse
 import logging
 import os
-import traceback
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from pathlib import Path
@@ -269,11 +268,8 @@ def process_obj_materials(
                 files_to_delete.append(obj_file)
                 files_to_delete.append(mtl_file)
 
-        except ImportError:
-            logger.warning("trimesh not available, cannot split OBJ by materials")
         except Exception as e:
-            logger.warning(f"Failed to split OBJ file {obj_file} by materials: {e}")
-            traceback.print_exc()
+            logger.exception(f"Failed to split OBJ file {obj_file} by materials: {e}")
 
     except Exception as e:
         logger.error(f"Failed to process MTL file {mtl_file}: {e}")
@@ -423,11 +419,7 @@ def split_obj_by_materials(mjcf_path: str | Path) -> None:
 
     # Add MTL materials to asset section
     for material in all_mtl_materials.values():
-        material_attrib = {
-            "name": material.name,
-            # "specular": material.mjcf_specular(),
-            # "shininess": material.mjcf_shininess(),
-        }
+        material_attrib = {"name": material.name}
         source_obj = material_source_objs[material.name]
         texture_file = material_texture_file(material, source_obj, mesh_dir)
         if texture_file is None:

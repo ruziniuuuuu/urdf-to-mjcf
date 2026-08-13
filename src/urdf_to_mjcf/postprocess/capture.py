@@ -8,12 +8,9 @@ import argparse
 import logging
 from pathlib import Path
 
+import mujoco
 import numpy as np
-
-try:
-    import mujoco
-except ImportError:
-    raise ImportError("MuJoCo is required for capture functionality. Install with: pip install mujoco")
+from PIL import Image
 
 logger = logging.getLogger(__name__)
 
@@ -211,37 +208,14 @@ def capture_scene(
 
         # Resize back to original dimensions
         if rgba_pixels.shape[0] != height or rgba_pixels.shape[1] != width:
-            try:
-                from PIL import Image
+            # LANCZOS for high-quality downsampling
+            temp_image = Image.fromarray(rgba_pixels, mode="RGBA").resize((width, height), Image.Resampling.LANCZOS)
+            rgba_pixels = np.array(temp_image)
+            logger.info(f"Resized back to original dimensions: {width}x{height}")
 
-                # Convert to PIL Image for high-quality resizing
-                temp_image = Image.fromarray(rgba_pixels, mode="RGBA")
-                # Use LANCZOS for high-quality downsampling
-                temp_image = temp_image.resize((width, height), Image.Resampling.LANCZOS)
-                rgba_pixels = np.array(temp_image)
-                logger.info(f"Resized back to original dimensions: {width}x{height}")
-            except ImportError:
-                # Fallback: use basic numpy resize (lower quality)
-                from scipy import ndimage
-
-                zoom_factors = (height / rgba_pixels.shape[0], width / rgba_pixels.shape[1], 1)
-                rgba_pixels = ndimage.zoom(rgba_pixels, zoom_factors, order=3)
-                logger.info(f"Resized back to original dimensions using scipy: {width}x{height}")
-
-        # Save using PIL for better format support (PNG supports transparency)
-        try:
-            from PIL import Image
-
-            image = Image.fromarray(rgba_pixels, mode="RGBA")
-            image.save(output_path)
-            logger.info(f"Saved image with transparency to: {output_path}")
-        except ImportError:
-            # Fallback to matplotlib if PIL is not available
-            # Note: matplotlib's imsave may not handle RGBA correctly for all formats
-            import matplotlib.pyplot as plt
-
-            plt.imsave(output_path, rgba_pixels)
-            logger.info(f"Saved image to: {output_path} (using matplotlib)")
+        # PNG through PIL, so the alpha channel survives
+        Image.fromarray(rgba_pixels, mode="RGBA").save(output_path)
+        logger.info(f"Saved image with transparency to: {output_path}")
 
         # Clean up
         renderer.close()

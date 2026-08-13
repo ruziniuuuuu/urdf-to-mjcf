@@ -414,7 +414,6 @@ def remove_empty_or_invalid_meshes(mjcf_path: str | Path) -> None:
             continue
 
         try:
-            ws_path = os.getcwd()
             ms = pymeshlab.MeshSet()
             ms.load_new_mesh(str(mesh_file_path))
             vertices = ms.current_mesh().vertex_matrix()
@@ -429,7 +428,6 @@ def remove_empty_or_invalid_meshes(mjcf_path: str | Path) -> None:
         except Exception as e:
             # 读取失败不等同于空mesh，这里只记录错误
             logger.error(f"读取mesh文件失败 {mesh_file_path}: {e}")
-            os.chdir(ws_path)
             logger.warning(f"检测到非法mesh: name={mesh_name}, file={mesh_file_attr}. 将从asset和worldbody中删除引用。")
             empty_mesh_elements.append(mesh)
             if mesh_name:
@@ -754,10 +752,7 @@ def merge_geoms_by_material(mjcf_path: str | Path) -> None:
                 logger.info(f"  成功合并 {len(geom_list)} 个geom为 1 个")
 
             except Exception as e:
-                logger.error(f"  合并body '{body_name}' 的geom时出错: {e}")
-                import traceback
-
-                traceback.print_exc()
+                logger.exception(f"  合并body '{body_name}' 的geom时出错: {e}")
                 continue
 
     if merged_count > 0:

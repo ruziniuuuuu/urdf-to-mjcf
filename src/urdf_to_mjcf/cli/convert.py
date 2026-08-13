@@ -8,7 +8,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import traceback
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -41,8 +40,7 @@ def load_joint_data_files(joint_data_files: Sequence[str] | None) -> JointData |
             with open(joint_data_file, "r") as file:
                 joint_data = JointData(**json.load(file))
         except Exception as exc:
-            logger.warning("Failed to load joint data from %s: %s", joint_data_file, exc)
-            traceback.print_exc()
+            logger.exception("Failed to load joint data from %s: %s", joint_data_file, exc)
             raise SystemExit(1) from exc
         logger.info("Loaded joint data from %s", joint_data_file)
         extra_joints.extend(joint_data.extra_joints)
@@ -120,8 +118,6 @@ def convert_urdf_to_mjcf(
         collision_only=collision_only,
         materials=inputs.materials,
     )
-
-    # add_contact(mjcf_root, robot)
 
     # Add weld constraints if specified in metadata
     add_weld_constraints(context.mjcf_root, metadata)

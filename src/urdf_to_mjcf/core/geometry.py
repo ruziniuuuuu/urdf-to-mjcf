@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+import trimesh
 
 logger = logging.getLogger(__name__)
 
@@ -251,12 +252,6 @@ def _primitive_min_z(geom_type: str, size_vals: list[float], total_tf: list[list
 
 def _load_mesh_vertices(mesh_file_path: Path, scale_str: str | None = None) -> np.ndarray:
     """Load mesh vertices with optional scale applied."""
-    try:
-        import trimesh
-    except ImportError:
-        logger.warning("trimesh not available, using fallback for mesh min_z computation")
-        return np.empty((0, 3), dtype=float)
-
     if not mesh_file_path.exists():
         logger.warning(f"compute mesh z min: Mesh file not found: {mesh_file_path}")
         return np.empty((0, 3), dtype=float)
@@ -291,25 +286,6 @@ def _load_mesh_vertices(mesh_file_path: Path, scale_str: str | None = None) -> n
     except Exception as e:
         logger.warning(f"Failed to load mesh '{mesh_file_path.name}': {e}")
         return np.empty((0, 3), dtype=float)
-
-
-def _compute_mesh_min_z(mesh_file_path: Path, scale_str: str | None = None) -> float:
-    """Compute the minimum Z value from a mesh file.
-
-    Args:
-        mesh_file_path: Full path to the mesh file.
-        scale_str: Optional scale string (e.g., "1 1 1").
-
-    Returns:
-        The minimum Z value in the mesh's local frame.
-    """
-    vertices = _load_mesh_vertices(mesh_file_path, scale_str)
-    if vertices.size == 0:
-        return 0.0
-
-    min_z = float(vertices[:, 2].min())
-    logger.info(f"Computed min_z for mesh '{mesh_file_path.name}': {min_z}")
-    return min_z
 
 
 def rpy_to_quat(rpy_str: str) -> str:

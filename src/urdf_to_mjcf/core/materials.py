@@ -90,25 +90,6 @@ class Material:
             alpha = "1.0"
         return f"{Kd} {alpha}"
 
-    def mjcf_shininess(self) -> str:
-        """Convert shininess value to MJCF format."""
-        if self.Ns is not None:
-            f_ns = float(self.Ns)
-            # Normalize Ns value to [0, 1]. Ns values normally range from 0 to 1000.
-            Ns = f_ns / 1_000 if f_ns > 1.0 else f_ns
-        else:
-            Ns = 0.5
-        return f"{Ns}"
-
-    def mjcf_specular(self) -> str:
-        """Convert specular value to MJCF format."""
-        if self.Ks is not None:
-            # Take the average of the specular RGB values.
-            Ks = sum(list(map(float, self.Ks.split(" ")))) / 3
-        else:
-            Ks = 0.5
-        return f"{Ks}"
-
 
 def parse_mtl_name(lines: Sequence[str]) -> Optional[str]:
     """Parse MTL file name from OBJ file lines."""
