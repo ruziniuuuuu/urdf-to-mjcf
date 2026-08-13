@@ -3,6 +3,8 @@
 import math
 import xml.etree.ElementTree as ET
 
+import pytest
+
 from urdf_to_mjcf.core.geometry import (
     build_transform,
     compute_min_z,
@@ -77,6 +79,13 @@ def test_compute_min_z_uses_rotated_cylinder_radius() -> None:
 def test_rpy_to_quat_zero() -> None:
     q = rpy_to_quat("0 0 0")
     assert q == "1 0 0 0"
+
+
+def test_rpy_to_quat_rejects_malformed_input() -> None:
+    with pytest.raises(ValueError, match="Expected three rpy values"):
+        rpy_to_quat("0 0")
+    with pytest.raises(ValueError):
+        rpy_to_quat("0 0 not-a-number")
 
 
 def test_rpy_to_quat_nonzero() -> None:

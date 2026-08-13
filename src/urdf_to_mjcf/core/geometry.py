@@ -314,10 +314,10 @@ def _compute_mesh_min_z(mesh_file_path: Path, scale_str: str | None = None) -> f
 
 def rpy_to_quat(rpy_str: str) -> str:
     """Convert roll, pitch, yaw angles (in radians) to a quaternion (w, x, y, z)."""
-    try:
-        r, p, y = map(float, rpy_str.split())
-    except Exception:
-        r, p, y = 0.0, 0.0, 0.0
+    values = [float(v) for v in rpy_str.split()]
+    if len(values) != 3:
+        raise ValueError(f"Expected three rpy values, got {rpy_str!r}")
+    r, p, y = values
     cy = math.cos(y * 0.5)
     sy = math.sin(y * 0.5)
     cp = math.cos(p * 0.5)
