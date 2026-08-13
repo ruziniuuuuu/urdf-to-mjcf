@@ -25,6 +25,7 @@ from urdf_to_mjcf.postprocess.remove_redundancies import remove_redundancies
 from urdf_to_mjcf.postprocess.sanitize_mesh_assets import sanitize_mesh_assets
 from urdf_to_mjcf.postprocess.split_obj_materials import (
     build_submesh_info,
+    convert_source_meshes_to_obj,
     process_obj_materials,
     remove_stale_generated_submeshes,
     split_obj_by_materials,
@@ -36,6 +37,38 @@ def write_text(path: Path, content: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content)
     return path
+
+
+def test_convert_source_meshes_to_obj_retargets_only_converted_references(tmp_path) -> None:
+    mesh_dir = tmp_path / "meshes"
+    box = trimesh.creation.box(extents=(1.0, 1.0, 1.0))
+    write_text(mesh_dir / "shared" / "placeholder.txt", "")
+    box.export((mesh_dir / "shared" / "wheel.glb").as_posix())
+
+    asset = ET.fromstring(
+        """
+        <asset>
+          <mesh name="wheel_a" file="shared/wheel.glb" />
+          <mesh name="wheel_b" file="shared/wheel.glb" />
+          <mesh name="absent" file="shared/absent.glb" />
+          <mesh name="untouched" file="shared/keep.stl" />
+        </asset>
+        """
+    )
+    files_to_delete: list[Path] = []
+
+    convert_source_meshes_to_obj(asset, mesh_dir, files_to_delete)
+
+    files = {mesh.attrib["name"]: mesh.attrib["file"] for mesh in asset.findall("mesh")}
+    assert files["wheel_a"] == "shared/wheel.obj"
+    assert files["wheel_b"] == "shared/wheel.obj"
+    # A source that does not exist keeps its own reference rather than gaining a
+    # dangling one to an OBJ that was never written.
+    assert files["absent"] == "shared/absent.glb"
+    assert files["untouched"] == "shared/keep.stl"
+    assert (mesh_dir / "shared" / "wheel.obj").exists()
+    # The shared source is converted once and marked for deletion once.
+    assert files_to_delete == [mesh_dir / "shared" / "wheel.glb"]
 
 
 def test_convert_radians_to_degrees_handles_valid_and_invalid_values() -> None:

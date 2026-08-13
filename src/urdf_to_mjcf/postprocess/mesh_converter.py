@@ -127,13 +127,6 @@ def glb2obj(glb_path: str | Path, obj_path: str | Path) -> None:
         logger.error(f"Failed to load GLB file {glb_path}: {e}")
         raise
 
-    mtl_path = obj_path.with_suffix(".mtl")
-    mtl_name = mtl_path.name
-    export_kwargs: dict[str, Any] = {"mtl_name": mtl_name}
-
-    if isinstance(mesh_data, trimesh.Scene):
-        mesh_data.export(str(obj_path), **export_kwargs)
-    else:
-        mesh_data.export(str(obj_path), **export_kwargs)
-
+    export_kwargs: dict[str, Any] = {"mtl_name": obj_path.with_suffix(".mtl").name}
+    mesh_data.export(str(obj_path), **export_kwargs)
     logger.info(f"Successfully converted GLB to OBJ: {obj_path}")

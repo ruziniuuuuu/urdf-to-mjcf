@@ -5,6 +5,7 @@ import logging
 import os
 import traceback
 import xml.etree.ElementTree as ET
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,54 @@ from urdf_to_mjcf.core.utils import save_xml
 from urdf_to_mjcf.postprocess.mesh_converter import dae2obj, glb2obj
 
 logger = logging.getLogger(__name__)
+
+
+MESH_CONVERTERS: tuple[tuple[tuple[str, ...], Callable[[Path, Path], None]], ...] = (
+    ((".dae",), dae2obj),
+    ((".glb", ".gltf"), glb2obj),
+)
+
+
+def convert_source_meshes_to_obj(asset: ET.Element, mesh_dir: Path, files_to_delete: list[Path]) -> None:
+    """Convert DAE and GLB mesh assets to OBJ, retargeting the assets that reference them.
+
+    Only references whose conversion actually produced an OBJ are retargeted, so a
+    missing or unconvertible source leaves its reference pointing at the original file
+    rather than at an OBJ that was never written.
+    """
+    converted: dict[Path, str] = {}
+
+    for mesh_elem in asset.findall("mesh"):
+        mesh_file = mesh_elem.get("file", "")
+        converter = next((fn for suffixes, fn in MESH_CONVERTERS if mesh_file.lower().endswith(suffixes)), None)
+        if converter is None:
+            continue
+
+        source_path = mesh_dir / mesh_file
+        if source_path in converted:
+            mesh_elem.attrib["file"] = converted[source_path]
+            continue
+
+        if not source_path.exists():
+            logger.warning(f"Mesh file {source_path} does not exist, skipping")
+            continue
+
+        obj_path = source_path.with_suffix(".obj")
+        try:
+            converter(source_path, obj_path)
+        except Exception as e:
+            logger.error(f"Failed to convert {source_path}: {e}")
+            continue
+
+        if not obj_path.exists():
+            logger.error(f"OBJ file was not created: {obj_path}")
+            continue
+
+        relative_obj_path = obj_path.relative_to(mesh_dir).as_posix()
+        converted[source_path] = relative_obj_path
+        mesh_elem.attrib["file"] = relative_obj_path
+        files_to_delete.append(source_path)
+        logger.info(f"Converted {source_path} to {obj_path}")
 
 
 def material_texture_file(material: Material, obj_file_path: Path, mesh_dir: Path) -> str | None:
@@ -253,111 +302,7 @@ def split_obj_by_materials(mjcf_path: str | Path) -> None:
         logger.info("No asset section found, skipping OBJ material splitting")
         return
 
-    # First, convert DAE files to OBJ files
-    dae_meshes: dict[str, str] = {}
-    glb_meshes: dict[str, str] = {}
-    for mesh_elem in asset.findall("mesh"):
-        mesh_name = mesh_elem.get("name", "")
-        mesh_file = mesh_elem.get("file", "")
-        if mesh_file.lower().endswith(".dae"):
-            dae_meshes[mesh_name] = mesh_file
-        elif mesh_file.lower().endswith((".glb", ".gltf")):
-            glb_meshes[mesh_name] = mesh_file
-
-    if dae_meshes:
-        # Convert DAE files to OBJ files
-        for mesh_name, mesh_file in dae_meshes.items():
-            dae_file_path = mesh_dir / mesh_file
-            if not dae_file_path.exists():
-                logger.warning(f"DAE file {dae_file_path} does not exist, skipping")
-                continue
-
-            # Generate OBJ file path
-            obj_file_path = dae_file_path.with_suffix(".obj")
-
-            try:
-                logger.info(f"Converting DAE to OBJ: {dae_file_path} -> {obj_file_path}")
-                dae2obj(dae_file_path, obj_file_path)
-
-                # Verify the OBJ file was created
-                if not obj_file_path.exists():
-                    logger.error(f"OBJ file was not created: {obj_file_path}")
-                    continue
-
-                # Update mesh element in asset to reference OBJ file
-                # Calculate relative path from mesh_dir to maintain directory structure
-                obj_relative_path = obj_file_path.relative_to(mesh_dir)
-                for mesh_elem in asset.findall("mesh"):
-                    if mesh_elem.get("name") == mesh_name:
-                        mesh_elem.attrib["file"] = str(obj_relative_path)
-                        logger.info(f"Updated asset reference: {mesh_name} -> {obj_relative_path}")
-                        break
-
-                # Mark original DAE file for deletion
-                files_to_delete.append(dae_file_path)
-                logger.info(f"Marked for deletion: {dae_file_path}")
-
-            except Exception as e:
-                logger.error(f"Failed to convert DAE file {dae_file_path}: {e}")
-                continue
-
-        # 直接读取mjcf文件，不使用tree，将所有的".dae"替换为".obj"
-        with open(mjcf_path, "r") as f:
-            mjcf_content = f.read()
-        mjcf_content = mjcf_content.replace(".dae", ".obj")
-        with open(mjcf_path, "w") as f:
-            f.write(mjcf_content)
-        # reload the mjcf file
-        tree = ET.parse(mjcf_path)
-        root = tree.getroot()
-        asset = root.find("asset")
-        if asset is None:
-            logger.info("No asset section found, skipping OBJ material splitting")
-            return
-
-    # Convert GLB/GLTF files to OBJ files
-    if glb_meshes:
-        for mesh_name, mesh_file in glb_meshes.items():
-            glb_file_path = mesh_dir / mesh_file
-            if not glb_file_path.exists():
-                logger.warning(f"GLB file {glb_file_path} does not exist, skipping")
-                continue
-
-            obj_file_path = glb_file_path.with_suffix(".obj")
-
-            try:
-                logger.info(f"Converting GLB to OBJ: {glb_file_path} -> {obj_file_path}")
-                glb2obj(glb_file_path, obj_file_path)
-
-                if not obj_file_path.exists():
-                    logger.error(f"OBJ file was not created: {obj_file_path}")
-                    continue
-
-                obj_relative_path = obj_file_path.relative_to(mesh_dir)
-                for mesh_elem in asset.findall("mesh"):
-                    if mesh_elem.get("name") == mesh_name:
-                        mesh_elem.attrib["file"] = str(obj_relative_path)
-                        logger.info(f"Updated asset reference: {mesh_name} -> {obj_relative_path}")
-                        break
-
-                files_to_delete.append(glb_file_path)
-                logger.info(f"Marked for deletion: {glb_file_path}")
-
-            except Exception as e:
-                logger.error(f"Failed to convert GLB file {glb_file_path}: {e}")
-                continue
-
-        with open(mjcf_path, "r") as f:
-            mjcf_content = f.read()
-        mjcf_content = mjcf_content.replace(".glb", ".obj").replace(".gltf", ".obj")
-        with open(mjcf_path, "w") as f:
-            f.write(mjcf_content)
-        tree = ET.parse(mjcf_path)
-        root = tree.getroot()
-        asset = root.find("asset")
-        if asset is None:
-            logger.info("No asset section found, skipping OBJ material splitting")
-            return
+    convert_source_meshes_to_obj(asset, mesh_dir, files_to_delete)
 
     # Collect all OBJ mesh assets (including converted ones)
     obj_meshes: dict[str, str] = {}
