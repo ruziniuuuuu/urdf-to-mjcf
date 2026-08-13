@@ -30,7 +30,7 @@ from urdf_to_mjcf.postprocess.split_obj_materials import (
     remove_stale_generated_submeshes,
     split_obj_by_materials,
 )
-from urdf_to_mjcf.postprocess.update_mesh import merge_materials, update_mesh
+from urdf_to_mjcf.postprocess.update_mesh import merge_materials, simplify_mesh_assets, update_mesh
 
 
 def write_text(path: Path, content: str) -> Path:
@@ -248,6 +248,53 @@ def test_process_obj_materials_registers_single_material_obj(tmp_path) -> None:
 
     assert list(materials) == ["mtl_link1_metal_black"]
     assert materials["mtl_link1_metal_black"].mjcf_rgba() == "0.01 0.01 0.01 1.0"
+
+
+def test_simplify_mesh_assets_decimates_until_within_vertex_budget(tmp_path) -> None:
+    mesh_path = tmp_path / "meshes" / "sphere.obj"
+    mesh_path.parent.mkdir(parents=True, exist_ok=True)
+    sphere = trimesh.creation.icosphere(subdivisions=4)
+    sphere.export(mesh_path)
+    mjcf_path = write_text(
+        tmp_path / "model.xml",
+        """
+        <mujoco>
+          <compiler meshdir="." />
+          <asset>
+            <mesh name="sphere" file="meshes/sphere.obj" />
+          </asset>
+        </mujoco>
+        """.strip(),
+    )
+
+    simplify_mesh_assets(mjcf_path, max_vertices=500)
+
+    simplified = trimesh.load(mesh_path, force="mesh")
+    assert isinstance(simplified, trimesh.Trimesh)
+    assert len(sphere.vertices) > 500
+    assert len(simplified.vertices) <= 500
+
+
+def test_simplify_mesh_assets_leaves_meshes_within_budget_untouched(tmp_path) -> None:
+    mesh_path = tmp_path / "meshes" / "sphere.obj"
+    mesh_path.parent.mkdir(parents=True, exist_ok=True)
+    trimesh.creation.icosphere(subdivisions=2).export(mesh_path)
+    original = mesh_path.read_bytes()
+    mjcf_path = write_text(
+        tmp_path / "model.xml",
+        """
+        <mujoco>
+          <compiler meshdir="." />
+          <asset>
+            <mesh name="sphere" file="meshes/sphere.obj" />
+          </asset>
+        </mujoco>
+        """.strip(),
+    )
+
+    simplify_mesh_assets(mjcf_path, max_vertices=500)
+
+    assert mesh_path.read_bytes() == original
 
 
 def test_mesh_postprocess_preserves_obj_texture_materials(tmp_path) -> None:

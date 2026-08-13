@@ -17,6 +17,11 @@ from urdf_to_mjcf.core.utils import save_xml
 
 logger = logging.getLogger(__name__)
 
+# Quadric edge collapse takes a target face count, and the vertex-to-face ratio
+# only holds exactly for clean manifolds, so a pass can land just over budget.
+# Re-measure and run another pass; two are enough in practice.
+MAX_DECIMATION_PASSES = 5
+
 
 class GeomMergeInfo(TypedDict):
     element: ET.Element
@@ -70,29 +75,34 @@ def simplify_mesh_assets(mjcf_path: str | Path, max_vertices: int) -> None:
             mesh.attrib["file"] = str(mesh_file.relative_to(dir_path))
 
         try:
-            # 使用PyMeshLab加载网格获取顶点数
             ms = pymeshlab.MeshSet()
             ms.load_new_mesh(str(mesh_file))
 
-            max_simple_times = 5
-            vertices = ms.current_mesh().vertex_matrix()
-            if len(vertices) >= max_vertices:
-                while len(vertices) >= max_vertices:
-                    max_simple_times -= 1
-                    if max_simple_times <= 0:
-                        break
-                    nm = min(max_vertices, len(vertices))
-                    percentage = nm / max_vertices * 0.999
-                    ms.meshing_decimation_clustering(threshold=pymeshlab.PercentageValue(percentage))
-                    vertices = ms.current_mesh().vertex_matrix()
-                ms.save_current_mesh(str(mesh_file))
-                if os.path.exists(mesh_file.with_suffix(".mtl")):
-                    os.remove(mesh_file.with_suffix(".mtl"))
-                elif os.path.exists(str(mesh_file) + ".mtl"):
-                    os.remove(str(mesh_file) + ".mtl")
+            vertex_count = len(ms.current_mesh().vertex_matrix())
+            if vertex_count <= max_vertices:
+                continue
+
+            for _ in range(MAX_DECIMATION_PASSES):
+                face_count = ms.current_mesh().face_number()
+                target_faces = max(4, int(face_count * max_vertices / vertex_count))
+                ms.meshing_decimation_quadric_edge_collapse(targetfacenum=target_faces)
+                vertex_count = len(ms.current_mesh().vertex_matrix())
+                if vertex_count <= max_vertices:
+                    break
+            else:
+                logger.warning(
+                    f"{mesh_file.name} still has {vertex_count} vertices after "
+                    f"{MAX_DECIMATION_PASSES} decimation passes, budget is {max_vertices}"
+                )
+
+            ms.save_current_mesh(str(mesh_file))
+            # Decimation drops the UVs the MTL described, and the MJCF gets its
+            # materials from the asset section rather than from this sidecar.
+            for mtl_file in (mesh_file.with_suffix(".mtl"), mesh_file.with_name(mesh_file.name + ".mtl")):
+                mtl_file.unlink(missing_ok=True)
 
         except Exception as e:
-            logger.error(f"处理网格文件 {mesh_file} 时出错: {e}")
+            logger.error(f"Failed to simplify mesh file {mesh_file}: {e}")
             continue
 
     save_xml(mjcf_path, root)
