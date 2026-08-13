@@ -169,6 +169,7 @@ These paths will be searched when resolving `package://` URIs and locating mesh 
 - [Example Walkthrough](./docs/en/EXAMPLES.md)
 - [Troubleshooting](./docs/en/TROUBLESHOOTING.md)
 - [Contributing](./CONTRIBUTING.md)
+- [Asset preparation scripts](./align_stp/README.md) — standalone CAD and mesh preparation scripts, not part of the installed package
 
 ## 🤝 Acknowledgments
 

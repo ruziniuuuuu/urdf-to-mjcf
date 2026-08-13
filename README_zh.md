@@ -168,6 +168,7 @@ export URDF2MJCF_MODEL_PATH="/workspace/src/robot1_description:/workspace/src/ro
 - [元数据字段参考](./docs/zh_CN/METADATA_REFERENCE.md)
 - [示例教程](./docs/zh_CN/EXAMPLES.md)
 - [常见问题排查](./docs/zh_CN/TROUBLESHOOTING.md)
+- [资产准备脚本](./align_stp/README.md) —— 独立的 CAD/网格准备脚本，不属于已安装的包
 - [贡献指南](./CONTRIBUTING.md)
 
 ## 🤝 致谢
