@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TypedDict
 
 import numpy as np
+from scipy.spatial.transform import Rotation
 
 from urdf_to_mjcf.core.materials import is_source_scoped_mtl_material
 from urdf_to_mjcf.core.utils import save_xml
@@ -521,6 +522,25 @@ def remove_empty_mesh_dirs(mjcf_path: str | Path) -> None:
             logger.info(f"  - {d}")
 
 
+def _geom_rotation(geom_info: GeomMergeInfo) -> np.ndarray:
+    """Build the 3x3 rotation matrix of a geom from its euler angles or quaternion.
+
+    MuJoCo's default eulerseq is "xyz" in lowercase, meaning intrinsic rotations
+    about moving axes, which is scipy's "XYZ". Angles are radians here because
+    make_degrees runs after this postprocess step.
+    """
+    euler = geom_info["euler"]
+    if euler is not None:
+        return Rotation.from_euler("XYZ", euler).as_matrix()
+
+    quat = geom_info["quat"]
+    if quat is not None:
+        w, x, y, z = quat
+        return Rotation.from_quat([x, y, z, w]).as_matrix()
+
+    return np.eye(3)
+
+
 def merge_geoms_by_material(mjcf_path: str | Path) -> None:
     """合并同一body内具有相同材质属性的geom及其mesh文件.
 
@@ -625,44 +645,10 @@ def merge_geoms_by_material(mjcf_path: str | Path) -> None:
                     temp_ms = pymeshlab.MeshSet()
                     temp_ms.load_new_mesh(str(mesh_path))
 
-                    # 应用变换
-                    pos_vec = geom_info["pos"]
-
-                    # 构建旋转矩阵
-                    if geom_info["euler"] is not None:
-                        # 从欧拉角构建旋转矩阵 (XYZ顺序)
-                        euler_vec = geom_info["euler"]
-                        # MuJoCo使用的是extrinsic XYZ (相当于intrinsic ZYX)
-                        cx, cy, cz = np.cos(euler_vec)
-                        sx, sy, sz = np.sin(euler_vec)
-
-                        # 旋转矩阵: Rz * Ry * Rx
-                        rot_matrix = np.array(
-                            [
-                                [cy * cz, -cy * sz, sy],
-                                [sx * sy * cz + cx * sz, -sx * sy * sz + cx * cz, -sx * cy],
-                                [-cx * sy * cz + sx * sz, cx * sy * sz + sx * cz, cx * cy],
-                            ]
-                        )
-                    elif geom_info["quat"] is not None:
-                        # 从四元数构建旋转矩阵 (w, x, y, z)
-                        quat_vec = geom_info["quat"]
-                        w, x, y, z = quat_vec
-
-                        rot_matrix = np.array(
-                            [
-                                [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
-                                [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
-                                [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)],
-                            ]
-                        )
-                    else:
-                        rot_matrix = np.eye(3)
-
                     # 构建4x4变换矩阵
                     transform_matrix = np.eye(4)
-                    transform_matrix[:3, :3] = rot_matrix
-                    transform_matrix[:3, 3] = pos_vec
+                    transform_matrix[:3, :3] = _geom_rotation(geom_info)
+                    transform_matrix[:3, 3] = geom_info["pos"]
 
                     # 手动应用变换到顶点
                     vertices = temp_ms.current_mesh().vertex_matrix()

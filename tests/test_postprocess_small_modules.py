@@ -6,7 +6,9 @@ import math
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+import numpy as np
 import trimesh
+from scipy.spatial.transform import Rotation
 
 from urdf_to_mjcf.postprocess.base_joint import fix_base_joint
 from urdf_to_mjcf.postprocess.explicit_floor_contacts import add_explicit_floor_contacts
@@ -30,7 +32,12 @@ from urdf_to_mjcf.postprocess.split_obj_materials import (
     remove_stale_generated_submeshes,
     split_obj_by_materials,
 )
-from urdf_to_mjcf.postprocess.update_mesh import merge_materials, simplify_mesh_assets, update_mesh
+from urdf_to_mjcf.postprocess.update_mesh import (
+    merge_geoms_by_material,
+    merge_materials,
+    simplify_mesh_assets,
+    update_mesh,
+)
 
 
 def write_text(path: Path, content: str) -> Path:
@@ -248,6 +255,56 @@ def test_process_obj_materials_registers_single_material_obj(tmp_path) -> None:
 
     assert list(materials) == ["mtl_link1_metal_black"]
     assert materials["mtl_link1_metal_black"].mjcf_rgba() == "0.01 0.01 0.01 1.0"
+
+
+def test_merge_geoms_by_material_bakes_intrinsic_euler_rotation(tmp_path) -> None:
+    euler = (0.3, 0.7, -0.4)
+    extents = (0.2, 0.4, 0.6)
+    mesh_dir = tmp_path / "meshes"
+    mesh_dir.mkdir(parents=True, exist_ok=True)
+    trimesh.creation.box(extents=extents).export(mesh_dir / "rotated.obj")
+    trimesh.creation.box(extents=extents).export(mesh_dir / "offset.obj")
+    mjcf_path = write_text(
+        tmp_path / "model.xml",
+        f"""
+        <mujoco>
+          <compiler meshdir="." angle="radian" />
+          <asset>
+            <mesh name="rotated" file="meshes/rotated.obj" />
+            <mesh name="offset" file="meshes/offset.obj" />
+          </asset>
+          <worldbody>
+            <body name="torso">
+              <geom name="a" type="mesh" mesh="rotated" material="paint" euler="{euler[0]} {euler[1]} {euler[2]}" />
+              <geom name="b" type="mesh" mesh="offset" material="paint" pos="5 0 0" />
+            </body>
+          </worldbody>
+        </mujoco>
+        """.strip(),
+    )
+
+    merge_geoms_by_material(mjcf_path)
+
+    root = ET.parse(mjcf_path).getroot()
+    geoms = root.findall(".//body[@name='torso']/geom")
+    assert [geom.attrib["name"] for geom in geoms] == ["a"]
+    assert geoms[0].attrib["pos"] == "0 0 0"
+    assert geoms[0].attrib["material"] == "paint"
+
+    merged_asset = root.find(f"./asset/mesh[@name='{geoms[0].attrib['mesh']}']")
+    assert merged_asset is not None
+    merged = trimesh.load(tmp_path / merged_asset.attrib["file"], force="mesh")
+    assert isinstance(merged, trimesh.Trimesh)
+
+    # The second box sits far along +x, so the vertices near the origin are the
+    # rotated one and can be compared on their own. Intrinsic and extrinsic XYZ
+    # disagree here, which is what the asymmetric extents are for.
+    rotated_vertices = merged.vertices[merged.vertices[:, 0] < 1.0]
+    expected = (
+        np.asarray(trimesh.creation.box(extents=extents).vertices) @ Rotation.from_euler("XYZ", euler).as_matrix().T
+    )
+    assert len(rotated_vertices) == len(expected)
+    assert np.allclose(np.sort(rotated_vertices, axis=0), np.sort(expected, axis=0), atol=1e-6)
 
 
 def test_simplify_mesh_assets_decimates_until_within_vertex_budget(tmp_path) -> None:

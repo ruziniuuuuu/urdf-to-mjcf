@@ -48,8 +48,6 @@ def add_compiler(root: ET.Element) -> None:
         "angle": "radian",
         "meshdir": ".",
         "balanceinertia": "true",
-        # "eulerseq": "zyx",
-        # "autolimits": "true",
     }
 
     element = ET.Element("compiler", attrib=attrib)
