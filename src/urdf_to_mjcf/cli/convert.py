@@ -166,7 +166,6 @@ def main() -> None:
         "-ct",
         "--collision-type",
         type=str,
-        # 保持原样mesh，进行凸分解，进行凸包络
         choices=["mesh", "decomposition", "convex_hull"],
         help="The collision mesh processing mode to use.",
     )

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TypedDict
 
 import numpy as np
+import pymeshlab
 from scipy.spatial.transform import Rotation
 
 from urdf_to_mjcf.core.materials import is_source_scoped_mtl_material
@@ -39,16 +40,15 @@ class TransformedMesh(TypedDict):
 
 
 def simplify_mesh_assets(mjcf_path: str | Path, max_vertices: int) -> None:
-    """Update the mesh assets of the MJCF file.
+    """Decimate every mesh asset that exceeds the vertex budget.
 
     Args:
-        root: The root element of the MJCF file.
+        mjcf_path: The path to the MJCF file to process.
+        max_vertices: The vertex budget a single mesh may not exceed.
     """
     mjcf_path = Path(mjcf_path)
     tree = ET.parse(mjcf_path)
     root = tree.getroot()
-
-    import pymeshlab
 
     compiler = root.find("compiler")
     if compiler is None:
@@ -67,7 +67,6 @@ def simplify_mesh_assets(mjcf_path: str | Path, max_vertices: int) -> None:
             logger.warning(f"<update mesh> Mesh file {mesh_file} does not exist.")
             continue
 
-        # 检查文件扩展名
         if mesh_file.suffix.lower() not in [".obj", ".stl"]:
             logger.warning(f"Unsupported mesh format: {mesh_file.suffix}")
             continue
@@ -119,7 +118,6 @@ def remove_unused_mesh(mjcf_path: str | Path) -> None:
     tree = ET.parse(mjcf_path)
     root = tree.getroot()
 
-    # 获取meshdir路径
     compiler = root.find("compiler")
     if compiler is None:
         logger.warning("No compiler element found in MJCF file")
@@ -128,11 +126,10 @@ def remove_unused_mesh(mjcf_path: str | Path) -> None:
     meshdir = compiler.attrib.get("meshdir", ".")
     mesh_dir_path = mjcf_path.parent / meshdir
 
-    # 查找所有使用的mesh和material
+    # Meshes and materials referenced anywhere in the model
     used_meshes = set()
     used_materials = set()
 
-    # 1. 遍历所有geom元素，收集使用的mesh
     for geom in root.iter("geom"):
         mesh_name = geom.attrib.get("mesh")
         if mesh_name:
@@ -142,28 +139,24 @@ def remove_unused_mesh(mjcf_path: str | Path) -> None:
         if material_name:
             used_materials.add(material_name)
 
-    # 2. 遍历所有site元素，收集使用的material
     for site in root.iter("site"):
         material_name = site.attrib.get("material")
         if material_name:
             used_materials.add(material_name)
 
-    # 3. 遍历所有body元素，收集使用的material
     for body in root.iter("body"):
         material_name = body.attrib.get("material")
         if material_name:
             used_materials.add(material_name)
 
-    logger.info(f"使用中的mesh: {used_meshes}")
-    logger.info(f"使用中的material: {used_materials}")
+    logger.info(f"Meshes in use: {used_meshes}")
+    logger.info(f"Materials in use: {used_materials}")
 
-    # 获取asset元素
     asset = root.find("asset")
     if asset is None:
         logger.warning("No asset element found in MJCF file")
         return
 
-    # 收集要删除的mesh和对应文件
     meshes_to_remove = []
     mesh_files_to_remove: list[Path] = []
 
@@ -172,64 +165,58 @@ def remove_unused_mesh(mjcf_path: str | Path) -> None:
         mesh_file = mesh.attrib.get("file")
 
         if mesh_name not in used_meshes:
-            logger.info(f"发现未使用的mesh: {mesh_name} (文件: {mesh_file})")
+            logger.info(f"Unused mesh: {mesh_name} (file: {mesh_file})")
             meshes_to_remove.append(mesh)
 
             if mesh_file:
-                # 添加mesh文件到删除列表
                 full_mesh_path = mesh_dir_path / mesh_file
                 if full_mesh_path.exists():
                     mesh_files_to_remove.append(full_mesh_path)
 
-                # 如果是obj文件，检查对应的mtl文件
+                # An OBJ takes its MTL sidecar with it
                 if mesh_file.lower().endswith(".obj"):
                     mtl_file = full_mesh_path.with_suffix(".mtl")
                     if mtl_file.exists():
                         mesh_files_to_remove.append(mtl_file)
 
-    # 收集要删除的material
     materials_to_remove = []
 
     for material in asset.findall("material"):
         material_name = material.attrib.get("name")
 
         if material_name not in used_materials:
-            logger.info(f"发现未使用的material: {material_name}")
+            logger.info(f"Unused material: {material_name}")
             materials_to_remove.append(material)
 
-    # 删除未使用的mesh元素
     for mesh in meshes_to_remove:
         asset.remove(mesh)
-        logger.info(f"已删除mesh元素: {mesh.attrib.get('name')}")
+        logger.info(f"Removed mesh element: {mesh.attrib.get('name')}")
 
-    # 删除未使用的material元素
     for material in materials_to_remove:
         asset.remove(material)
-        logger.info(f"已删除material元素: {material.attrib.get('name')}")
+        logger.info(f"Removed material element: {material.attrib.get('name')}")
 
-    # 检查mesh目录中的所有mesh文件，删除未被引用的文件
+    # Mesh files on disk that no asset points at are byproducts of earlier steps
     if mesh_dir_path.exists():
-        # 收集所有被引用的文件名
         referenced_files = set()
         for mesh in asset.findall("mesh"):
             mesh_file = mesh.attrib.get("file")
             if mesh_file:
                 referenced_files.add(mesh_file)
 
-        # 查找所有mesh文件
         mesh_extensions = [".obj", ".stl", ".dae", ".mtl"]
         for mesh_file_path in mesh_dir_path.rglob("*"):
             if mesh_file_path.is_file() and mesh_file_path.suffix.lower() in mesh_extensions:
-                # 计算相对于mesh目录的路径
                 relative_path = mesh_file_path.relative_to(mesh_dir_path)
-                relative_path_str = str(relative_path).replace("\\", "/")  # 统一使用正斜杠
+                relative_path_str = str(relative_path).replace("\\", "/")
 
                 if relative_path_str not in referenced_files:
-                    logger.info(f"发现未被引用的文件: {relative_path_str}")
+                    logger.info(f"Unreferenced file: {relative_path_str}")
                     mesh_files_to_remove.append(mesh_file_path)
 
-    # 过滤掉仍被保留mesh资产引用的文件（例如视觉与碰撞共用同一文件时，
-    # 碰撞asset被清理不应导致视觉引用的文件被删除）
+    # Keep files a surviving mesh asset still points at. Visual and collision
+    # geoms can share one file, so dropping the collision asset must not delete
+    # the file the visual asset still needs.
     retained_file_paths: set[Path] = set()
     if mesh_dir_path.exists():
         for mesh in asset.findall("mesh"):
@@ -240,7 +227,6 @@ def remove_unused_mesh(mjcf_path: str | Path) -> None:
                 except OSError:
                     continue
 
-    # 删除文件
     deleted_files: list[Path] = []
     seen_targets: set[Path] = set()
     for file_path in mesh_files_to_remove:
@@ -249,7 +235,7 @@ def remove_unused_mesh(mjcf_path: str | Path) -> None:
         except OSError:
             resolved = file_path
         if resolved in retained_file_paths:
-            logger.debug(f"跳过仍被引用的文件: {file_path}")
+            logger.debug(f"Keeping still-referenced file: {file_path}")
             continue
         if resolved in seen_targets:
             continue
@@ -258,23 +244,21 @@ def remove_unused_mesh(mjcf_path: str | Path) -> None:
             if file_path.exists():
                 file_path.unlink()
                 deleted_files.append(file_path)
-                logger.info(f"已删除文件: {file_path}")
+                logger.info(f"Deleted file: {file_path}")
         except Exception as e:
-            logger.error(f"删除文件 {file_path} 时出错: {e}")
+            logger.error(f"Failed to delete file {file_path}: {e}")
 
-    # 保存修改后的MJCF文件
     if meshes_to_remove or materials_to_remove:
         save_xml(mjcf_path, tree)
-        logger.info(f"已更新MJCF文件: {mjcf_path}")
+        logger.info(f"Updated MJCF file: {mjcf_path}")
 
-    # 总结
-    logger.info("清理完成:")
-    logger.info(f"  删除的mesh元素: {len(meshes_to_remove)}")
-    logger.info(f"  删除的material元素: {len(materials_to_remove)}")
-    logger.info(f"  删除的文件: {len(deleted_files)}")
+    logger.info("Cleanup done:")
+    logger.info(f"  mesh elements removed: {len(meshes_to_remove)}")
+    logger.info(f"  material elements removed: {len(materials_to_remove)}")
+    logger.info(f"  files removed: {len(deleted_files)}")
 
     if deleted_files:
-        logger.info("删除的文件列表:")
+        logger.info("Removed files:")
         for deleted_file in deleted_files:
             logger.info(f"  - {deleted_file}")
 
@@ -289,18 +273,16 @@ def merge_materials(mjcf_path: str | Path) -> None:
     tree = ET.parse(mjcf_path)
     root = tree.getroot()
 
-    # 获取asset元素
     asset = root.find("asset")
     if asset is None:
         logger.warning("No asset element found in MJCF file")
         return
 
-    # 合并属性相同的材质
-    # 1. 收集所有材质的属性签名和名称映射
-    material_signature_map = {}  # 签名 -> 第一个材质名称
-    material_name_to_signature = {}  # 材质名称 -> 签名
+    # Materials sharing an attribute signature collapse onto the first one seen
+    material_signature_map = {}  # signature -> canonical material name
+    material_name_to_signature = {}  # material name -> signature
 
-    logger.info("开始收集材质信息...")
+    logger.info("Collecting material information...")
     for material in asset.findall("material"):
         material_name = material.attrib.get("name")
         if not material_name:
@@ -313,79 +295,67 @@ def merge_materials(mjcf_path: str | Path) -> None:
         else:
             signature = str(attrib_items)
 
-        logger.debug(f"材质 '{material_name}' 的签名: {signature}")
+        logger.debug(f"Material '{material_name}' signature: {signature}")
 
         material_name_to_signature[material_name] = signature
 
         if signature not in material_signature_map:
             material_signature_map[signature] = material_name
-            logger.debug("  -> 首次遇到此签名，设为规范名称")
+            logger.debug("  -> first sighting of this signature, taking it as canonical")
         else:
-            # 发现重复的材质
             canonical_name = material_signature_map[signature]
             if material_name != canonical_name:
-                logger.info(f"⚠️  发现重复材质: '{material_name}' 与 '{canonical_name}' 属性相同，将合并")
+                logger.info(f"Duplicate material: '{material_name}' matches '{canonical_name}', merging")
 
-    # 2. 更新所有引用了重复材质的元素
-    material_rename_map = {}  # 旧名称 -> 新名称
+    material_rename_map = {}  # old name -> canonical name
     for mat_name, signature in material_name_to_signature.items():
         canonical_name = material_signature_map[signature]
         if mat_name != canonical_name:
             material_rename_map[mat_name] = canonical_name
 
-    logger.info(
-        f"材质合并结果: 共扫描 {len(material_name_to_signature)} 个材质，发现 {len(material_rename_map)} 个重复材质"
-    )
+    logger.info(f"Scanned {len(material_name_to_signature)} materials, {len(material_rename_map)} of them duplicates")
 
     if material_rename_map:
-        logger.info(f"⚠️  材质重命名映射 (共 {len(material_rename_map)} 项):")
+        logger.info(f"Material renames ({len(material_rename_map)}):")
         for old_name, new_name in material_rename_map.items():
             logger.info(f"    {old_name} -> {new_name}")
 
-        # 更新所有geom元素中的material引用
         for geom in root.iter("geom"):
             material_name = geom.attrib.get("material")
             if material_name and material_name in material_rename_map:
                 new_name = material_rename_map[material_name]
                 geom.attrib["material"] = new_name
-                logger.info(f"更新geom的material引用: {material_name} -> {new_name}")
+                logger.info(f"Retargeted geom material: {material_name} -> {new_name}")
 
-        # 更新所有site元素中的material引用
         for site in root.iter("site"):
             material_name = site.attrib.get("material")
             if material_name and material_name in material_rename_map:
                 new_name = material_rename_map[material_name]
                 site.attrib["material"] = new_name
-                logger.info(f"更新site的material引用: {material_name} -> {new_name}")
+                logger.info(f"Retargeted site material: {material_name} -> {new_name}")
 
-        # 更新所有body元素中的material引用
         for body in root.iter("body"):
             material_name = body.attrib.get("material")
             if material_name and material_name in material_rename_map:
                 new_name = material_rename_map[material_name]
                 body.attrib["material"] = new_name
-                logger.info(f"更新body的material引用: {material_name} -> {new_name}")
+                logger.info(f"Retargeted body material: {material_name} -> {new_name}")
 
-        # 从asset中删除重复的材质定义
         for material in list(asset.findall("material")):
             material_name = material.attrib.get("name")
             if material_name and material_name in material_rename_map:
                 asset.remove(material)
-                logger.info(f"已删除重复的material元素: {material_name}")
+                logger.info(f"Removed duplicate material element: {material_name}")
 
-        # 保存修改后的MJCF文件
         save_xml(mjcf_path, tree)
-        logger.info(f"✅ 材质合并完成，已更新MJCF文件: {mjcf_path}")
+        logger.info(f"Merged materials, updated {mjcf_path}")
 
 
 def remove_empty_or_invalid_meshes(mjcf_path: str | Path) -> None:
-    """检测并移除顶点数为0的空mesh，同时删除worldbody中的引用。
+    """Drop mesh assets that hold no vertices, along with the geoms using them.
 
-    - 遍历`asset/mesh`并读取对应文件
-    - 若顶点数为0：
-      1) 记录warning日志
-      2) 从`asset`中删除该`mesh`
-      3) 从`worldbody`（实际为各级`body`下的`geom`）中删除引用该mesh的`geom`
+    A mesh file that fails to load counts as unusable too: MuJoCo would refuse
+    to compile the model, so the asset and its geoms go the same way.
     """
     mjcf_path = Path(mjcf_path)
     tree = ET.parse(mjcf_path)
@@ -404,9 +374,7 @@ def remove_empty_or_invalid_meshes(mjcf_path: str | Path) -> None:
         logger.warning("No asset element found in MJCF file")
         return
 
-    import pymeshlab
-
-    # 收集空mesh及其名称
+    # Empty meshes, and the names geoms reference them by
     empty_mesh_elements: list[ET.Element] = []
     empty_mesh_names: set[str] = set()
 
@@ -420,7 +388,6 @@ def remove_empty_or_invalid_meshes(mjcf_path: str | Path) -> None:
         if not mesh_file_path.exists():
             continue
 
-        # 仅处理常见的网格格式
         if mesh_file_path.suffix.lower() not in [".obj", ".stl"]:
             continue
 
@@ -429,17 +396,15 @@ def remove_empty_or_invalid_meshes(mjcf_path: str | Path) -> None:
             ms.load_new_mesh(str(mesh_file_path))
             vertices = ms.current_mesh().vertex_matrix()
             if len(vertices) == 0:
-                # 记录warning并标记删除
                 logger.warning(
-                    f"检测到空mesh: name={mesh_name}, file={mesh_file_attr}. 将从asset和worldbody中删除引用。"
+                    f"Empty mesh: name={mesh_name}, file={mesh_file_attr}. Dropping the asset and its geoms."
                 )
                 empty_mesh_elements.append(mesh)
                 if mesh_name:
                     empty_mesh_names.add(mesh_name)
         except Exception as e:
-            # 读取失败不等同于空mesh，这里只记录错误
-            logger.error(f"读取mesh文件失败 {mesh_file_path}: {e}")
-            logger.warning(f"检测到非法mesh: name={mesh_name}, file={mesh_file_attr}. 将从asset和worldbody中删除引用。")
+            logger.error(f"Failed to read mesh file {mesh_file_path}: {e}")
+            logger.warning(f"Unusable mesh: name={mesh_name}, file={mesh_file_attr}. Dropping the asset and its geoms.")
             empty_mesh_elements.append(mesh)
             if mesh_name:
                 empty_mesh_names.add(mesh_name)
@@ -449,30 +414,28 @@ def remove_empty_or_invalid_meshes(mjcf_path: str | Path) -> None:
     if not empty_mesh_elements and not empty_mesh_names:
         return
 
-    # 从worldbody（各级body）中删除引用这些mesh的geom
-    # 需要父节点来执行remove
+    # Removing a geom needs its parent, so walk parents and their direct
+    # children rather than iterating over geoms alone.
     if empty_mesh_names:
         for parent in root.iter():
-            # 遍历直接子元素，避免跨层误删
             for child in list(parent):
                 if child.tag == "geom":
                     ref_name = child.attrib.get("mesh")
                     if ref_name and ref_name in empty_mesh_names:
                         parent.remove(child)
                         logger.info(
-                            f"已从{parent.tag}中删除引用空mesh '{ref_name}' 的geom: name={child.attrib.get('name')}"
+                            f"Removed geom name={child.attrib.get('name')} from {parent.tag}: "
+                            f"it referenced empty mesh '{ref_name}'"
                         )
 
-    # 从asset中删除空mesh定义
     for mesh in empty_mesh_elements:
         try:
             mesh_name = mesh.attrib.get("name")
             asset.remove(mesh)
-            logger.info(f"已从asset中删除空mesh定义: {mesh_name}")
+            logger.info(f"Removed empty mesh asset: {mesh_name}")
         except Exception as e:
-            logger.error(f"从asset删除mesh失败: {e}")
+            logger.error(f"Failed to remove mesh from asset: {e}")
 
-    # 保存修改
     save_xml(mjcf_path, tree)
 
 
@@ -487,7 +450,7 @@ def remove_empty_mesh_dirs(mjcf_path: str | Path) -> None:
         tree = ET.parse(mjcf_path)
         root = tree.getroot()
     except Exception:
-        logger.debug("无法解析 MJCF 文件以获取 meshdir，跳过空文件夹清理")
+        logger.debug("Could not parse the MJCF file for its meshdir; skipping empty directory cleanup")
         return
 
     compiler = root.find("compiler")
@@ -542,7 +505,7 @@ def _geom_rotation(geom_info: GeomMergeInfo) -> np.ndarray:
 
 
 def merge_geoms_by_material(mjcf_path: str | Path) -> None:
-    """合并同一body内具有相同材质属性的geom及其mesh文件.
+    """Merge geoms sharing a material within a body, and their mesh files.
 
     Args:
         mjcf_path: The path to the MJCF file to process.
@@ -564,26 +527,22 @@ def merge_geoms_by_material(mjcf_path: str | Path) -> None:
         logger.warning("No asset element found in MJCF file")
         return
 
-    import pymeshlab
-
-    # 构建mesh名称到文件路径的映射
+    # Mesh assets by name, resolved to a path on disk
     mesh_name_to_file: dict[str, Path] = {}
     for mesh in asset.findall("mesh"):
         mesh_name = mesh.attrib.get("name")
         mesh_file = mesh.attrib.get("file")
         if mesh_name and mesh_file:
-            # 如果mesh_file已经包含meshdir，则直接使用；否则添加meshdir
             if mesh_file.startswith(meshdir):
                 mesh_name_to_file[mesh_name] = mjcf_path.parent / mesh_file
             else:
                 mesh_name_to_file[mesh_name] = mesh_dir_path / mesh_file
 
-    # 遍历所有body
     merged_count = 0
     for body in root.iter("body"):
         body_name = body.attrib.get("name", "unnamed")
 
-        # 收集该body下所有的geom，按材质属性分组
+        # Visual mesh geoms in this body, grouped by material
         material_to_geoms: dict[str, list[GeomMergeInfo]] = {}
 
         for geom in list(body.findall("geom")):
@@ -595,7 +554,6 @@ def merge_geoms_by_material(mjcf_path: str | Path) -> None:
             if not mesh_name or mesh_class == "collision":
                 continue
 
-            # 创建材质属性签名
             material_attribs: list[tuple[str, str]] = []
             for key in ["material", "rgba", "class"]:
                 if key in geom.attrib:
@@ -603,7 +561,6 @@ def merge_geoms_by_material(mjcf_path: str | Path) -> None:
 
             material_signature = str(sorted(material_attribs))
 
-            # 获取geom的位姿
             pos = geom.attrib.get("pos", "0 0 0")
             quat = geom.attrib.get("quat", "1 0 0 0")
             euler = geom.attrib.get("euler", None)
@@ -622,15 +579,14 @@ def merge_geoms_by_material(mjcf_path: str | Path) -> None:
                 }
             )
 
-        # 对每个材质组，如果有多个geom，则合并
         for material_sig, geom_list in material_to_geoms.items():
             if len(geom_list) <= 1:
-                continue  # 只有一个geom，无需合并
+                continue
 
-            logger.info(f"Body '{body_name}': 发现 {len(geom_list)} 个相同材质的geom，准备合并")
+            logger.info(f"Body '{body_name}': merging {len(geom_list)} geoms that share a material")
 
             try:
-                # 创建合并后的mesh - 先加载所有mesh并应用变换
+                # Bake each geom pose into its mesh vertices before combining
                 all_transformed_meshes: list[TransformedMesh] = []
 
                 for i, geom_info in enumerate(geom_list):
@@ -638,42 +594,37 @@ def merge_geoms_by_material(mjcf_path: str | Path) -> None:
                     mesh_path = mesh_name_to_file.get(mesh_name)
 
                     if mesh_path is None or not mesh_path.exists():
-                        logger.warning(f"  Mesh文件不存在: {mesh_name}")
+                        logger.warning(f"  Mesh file does not exist: {mesh_name}")
                         continue
 
-                    # 加载mesh
                     temp_ms = pymeshlab.MeshSet()
                     temp_ms.load_new_mesh(str(mesh_path))
 
-                    # 构建4x4变换矩阵
                     transform_matrix = np.eye(4)
                     transform_matrix[:3, :3] = _geom_rotation(geom_info)
                     transform_matrix[:3, 3] = geom_info["pos"]
 
-                    # 手动应用变换到顶点
                     vertices = temp_ms.current_mesh().vertex_matrix()
                     faces = temp_ms.current_mesh().face_matrix()
 
                     vertices_homo = np.hstack([vertices, np.ones((vertices.shape[0], 1))])
                     transformed_vertices = (transform_matrix @ vertices_homo.T).T[:, :3]
 
-                    # 保存变换后的顶点和面
                     all_transformed_meshes.append({"vertices": transformed_vertices, "faces": faces})
 
-                    logger.debug(f"  Mesh {i}: {len(transformed_vertices)} 顶点, {len(faces)} 面")
+                    logger.debug(f"  Mesh {i}: {len(transformed_vertices)} vertices, {len(faces)} faces")
 
                 if len(all_transformed_meshes) == 0:
-                    logger.warning(f"  Body '{body_name}': 无法加载任何mesh，跳过合并")
+                    logger.warning(f"  Body '{body_name}': no mesh could be loaded, skipping the merge")
                     continue
 
-                # 合并所有mesh的顶点和面
                 vertex_offset = 0
                 all_vertices = []
                 all_faces = []
 
                 for mesh_data in all_transformed_meshes:
                     all_vertices.append(mesh_data["vertices"])
-                    # 更新面索引（添加顶点偏移）
+                    # Face indices shift by the vertices already added
                     adjusted_faces = mesh_data["faces"] + vertex_offset
                     all_faces.append(adjusted_faces)
                     vertex_offset += len(mesh_data["vertices"])
@@ -681,81 +632,72 @@ def merge_geoms_by_material(mjcf_path: str | Path) -> None:
                 combined_vertices = np.vstack(all_vertices)
                 combined_faces = np.vstack(all_faces)
 
-                logger.info(f"  合并后: {len(combined_vertices)} 顶点, {len(combined_faces)} 面")
+                logger.info(f"  Merged: {len(combined_vertices)} vertices, {len(combined_faces)} faces")
 
-                # 创建合并后的mesh
                 merged_ms = pymeshlab.MeshSet()
                 merged_mesh = pymeshlab.Mesh(combined_vertices, combined_faces)
                 merged_ms.add_mesh(merged_mesh)
 
-                # 生成新的mesh文件名 - 保存在第一个mesh文件所在的文件夹
+                # The merged mesh lands next to the first source mesh
                 first_geom = geom_list[0]
                 original_mesh_name = first_geom["mesh_name"]
                 original_mesh_file = mesh_name_to_file.get(original_mesh_name)
 
-                # 获取原mesh文件所在的文件夹
                 if original_mesh_file and original_mesh_file.exists():
                     target_dir = original_mesh_file.parent
                 else:
-                    # 如果找不到原文件，则使用meshdir
                     target_dir = mesh_dir_path
 
                 merged_mesh_name = f"{body_name}_merged_{original_mesh_name.split('_')[0]}"
                 merged_mesh_file = target_dir / f"{merged_mesh_name}.obj"
 
-                # 确保文件名唯一
                 counter = 1
                 while merged_mesh_file.exists():
                     merged_mesh_name = f"{body_name}_merged_{original_mesh_name.split('_')[0]}_{counter}"
                     merged_mesh_file = target_dir / f"{merged_mesh_name}.obj"
                     counter += 1
 
-                # 保存合并后的mesh
                 merged_ms.save_current_mesh(str(merged_mesh_file))
-                logger.info(f"  保存合并后的mesh: {merged_mesh_file}")
+                logger.info(f"  Saved merged mesh: {merged_mesh_file}")
 
-                # 计算相对于MJCF文件的路径
                 mesh_file_relative = str(merged_mesh_file.relative_to(mjcf_path.parent))
 
-                # 在asset中添加新的mesh定义
                 new_mesh_element = ET.Element("mesh", name=merged_mesh_name, file=mesh_file_relative)
                 asset.append(new_mesh_element)
 
-                # 更新第一个geom，删除其他geom
+                # The first geom takes over the merged mesh
                 first_geom_element = geom_list[0]["element"]
                 first_geom_element.attrib["mesh"] = merged_mesh_name
 
-                # 确保材质属性被保留（从material_attribs中恢复）
                 material_attribs = geom_list[0]["material_attribs"]
                 if material_attribs:
-                    logger.info("  保留材质属性:")
+                    logger.info("  Kept material attributes:")
                     for key, value in material_attribs:
                         first_geom_element.attrib[key] = value
                         logger.info(f"    {key} = {value}")
 
-                # 重置位姿为原点（因为已经应用到mesh上了）
+                # The pose now lives in the vertices, so reset it
                 first_geom_element.attrib["pos"] = "0 0 0"
                 if "quat" in first_geom_element.attrib:
                     first_geom_element.attrib["quat"] = "1 0 0 0"
                 if "euler" in first_geom_element.attrib:
                     del first_geom_element.attrib["euler"]
 
-                # 删除其他geom
                 for i in range(1, len(geom_list)):
                     body.remove(geom_list[i]["element"])
 
                 merged_count += 1
-                logger.info(f"  成功合并 {len(geom_list)} 个geom为 1 个")
+                logger.info(f"  Merged {len(geom_list)} geoms into one")
 
             except Exception as e:
-                logger.exception(f"  合并body '{body_name}' 的geom时出错: {e}")
+                logger.exception(f"  Failed to merge the geoms of body '{body_name}': {e}")
                 continue
 
     if merged_count > 0:
         save_xml(mjcf_path, tree)
-        logger.info(f"✅ 合并完成: 共处理 {merged_count} 组geom")
+        logger.info(f"Merged {merged_count} geom groups")
     else:
-        logger.info("未找到需要合并的geom")
+        logger.info("No geoms needed merging")
 
 
 def update_mesh(mjcf_path: str | Path, max_vertices: int = 1000000) -> None:
@@ -769,11 +711,11 @@ def update_mesh(mjcf_path: str | Path, max_vertices: int = 1000000) -> None:
     merge_materials(mjcf_path)
     merge_geoms_by_material(mjcf_path)
     remove_unused_mesh(mjcf_path)
-    # 最后清理 meshdir 下的空文件夹（递归），但不删除 meshdir 根目录本身
+    # Earlier steps leave directories behind once their meshes are gone
     try:
         remove_empty_mesh_dirs(mjcf_path)
     except Exception as e:
-        logger.warning(f"清理 meshdir 空文件夹时发生错误: {e}")
+        logger.warning(f"Failed to clean up empty directories under meshdir: {e}")
 
 
 def main() -> None:

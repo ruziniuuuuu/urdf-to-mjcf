@@ -11,14 +11,14 @@ logger = logging.getLogger(__name__)
 
 # MTL fields relevant to MuJoCo
 MTL_FIELDS = (
-    "Ns",  # Shininess / 镜面反射指数
-    "Ka",  # Ambient color / 基础光颜色
-    "Kd",  # Diffuse color / 漫反射颜色
-    "Ks",  # Specular color / 镜面反射颜色
-    "Ke",  # Emissive color / 自发光颜色
-    "Ni",  # Optical density / 折射率
-    "d",  # Transparency (alpha) / 透明度
-    "Tr",  # 1 - transparency / 1 - 透明度
+    "Ns",  # Shininess
+    "Ka",  # Ambient color
+    "Kd",  # Diffuse color
+    "Ks",  # Specular color
+    "Ke",  # Emissive color
+    "Ni",  # Optical density
+    "d",  # Transparency (alpha)
+    "Tr",  # 1 - transparency
     "map_Kd",  # Diffuse texture map
 )
 

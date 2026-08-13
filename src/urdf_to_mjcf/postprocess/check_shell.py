@@ -1,4 +1,4 @@
-"""检查mesh文件中的点是否全部共面，如果是则添加inertia="shell"属性。"""
+"""Mark meshes whose vertices are all coplanar with inertia="shell"."""
 
 import logging
 import xml.etree.ElementTree as ET
@@ -14,67 +14,62 @@ logger = logging.getLogger(__name__)
 
 
 def read_mesh_vertices(file_path: Path) -> Optional[np.ndarray]:
-    """
-    使用trimesh读取mesh文件的顶点。
+    """Read the vertices of a mesh file.
 
     Args:
-        file_path: mesh文件路径
+        file_path: Path to the mesh file.
 
     Returns:
-        顶点数组 (N, 3) 或 None（如果读取失败）
+        An (N, 3) vertex array, or None if the file could not be read.
     """
     if not file_path.exists():
-        logger.warning(f"Mesh文件不存在: {file_path}")
+        logger.warning(f"Mesh file does not exist: {file_path}")
         return None
 
     try:
-        # 使用trimesh加载mesh文件
         mesh_data = trimesh.load(file_path, force="mesh")
 
         if mesh_data is None:
-            logger.warning(f"无法加载mesh文件: {file_path}")
+            logger.warning(f"Could not load mesh file: {file_path}")
             return None
 
         if not isinstance(mesh_data, trimesh.Trimesh):
-            logger.warning(f"Mesh文件 {file_path} 不是三角网格，跳过")
+            logger.warning(f"Mesh file {file_path} is not a triangle mesh, skipping")
             return None
 
-        # 获取顶点
         vertices = mesh_data.vertices
 
         if vertices is None or len(vertices) == 0:
-            logger.warning(f"Mesh文件 {file_path} 中没有顶点")
+            logger.warning(f"Mesh file {file_path} has no vertices")
             return None
 
-        logger.debug(f"成功读取mesh文件 {file_path}，共 {len(vertices)} 个顶点")
+        logger.debug(f"Read {len(vertices)} vertices from {file_path}")
         return vertices
 
     except Exception as e:
-        logger.warning(f"读取mesh文件 {file_path} 失败: {e}")
+        logger.warning(f"Failed to read mesh file {file_path}: {e}")
         return None
 
 
 def check_coplanar(vertices: np.ndarray, tolerance: float = 1e-6) -> bool:
-    """
-    检查顶点是否全部共面。
+    """Return whether every vertex lies on a common plane.
 
     Args:
-        vertices: 顶点数组 (N, 3)
-        tolerance: 共面判断的容差
+        vertices: An (N, 3) vertex array.
+        tolerance: Maximum point-to-plane distance still counted as coplanar.
 
     Returns:
-        True如果所有点共面，否则False
+        True if all points are coplanar.
     """
     if len(vertices) < 4:
-        # 少于4个点总是共面的
-        logger.debug(f"顶点数量 {len(vertices)} < 4，认为是共面的")
+        # Three points or fewer always share a plane
+        logger.debug(f"{len(vertices)} vertices < 4, treating as coplanar")
         return True
 
-    # 取前三个不共线的点来定义平面
-    # 找到第一个点作为参考
+    # Define the plane from the first three non-collinear points
     p0 = vertices[0]
 
-    # 找到与p0不重合的第二个点
+    # Second point: the first one that does not coincide with p0
     p1 = None
     for i in range(1, len(vertices)):
         if not np.allclose(vertices[i], p0, atol=tolerance):
@@ -82,10 +77,10 @@ def check_coplanar(vertices: np.ndarray, tolerance: float = 1e-6) -> bool:
             break
 
     if p1 is None:
-        logger.debug("所有顶点都重合，认为是共面的")
+        logger.debug("All vertices coincide, treating as coplanar")
         return True
 
-    # 找到不与p0-p1共线的第三个点
+    # Third point: the first one not collinear with p0-p1
     p2 = None
     v1 = p1 - p0
     for i in range(len(vertices)):
@@ -93,59 +88,56 @@ def check_coplanar(vertices: np.ndarray, tolerance: float = 1e-6) -> bool:
             continue
 
         v2 = vertices[i] - p0
-        # 检查是否共线（叉积接近零）
+        # Collinear means a near-zero cross product
         cross = np.cross(v1, v2)
         if np.linalg.norm(cross) > tolerance:
             p2 = vertices[i]
             break
 
     if p2 is None:
-        logger.debug("所有顶点都共线，认为是共面的")
+        logger.debug("All vertices are collinear, treating as coplanar")
         return True
 
-    # 现在有了三个不共线的点，计算平面法向量
+    # Three non-collinear points give the plane normal
     v1 = p1 - p0
     v2 = p2 - p0
     normal = np.cross(v1, v2)
-    normal = normal / np.linalg.norm(normal)  # 单位化
+    normal = normal / np.linalg.norm(normal)
 
-    # 计算平面方程中的d值: ax + by + cz + d = 0
+    # d in the plane equation ax + by + cz + d = 0
     d = -np.dot(normal, p0)
 
-    # 检查所有其他点是否在这个平面上
+    # Every remaining point has to sit on that plane
     for vertex in vertices:
         distance = abs(np.dot(normal, vertex) + d)
         if distance > tolerance:
-            logger.debug(f"发现非共面点，距离平面 {distance:.2e} > 容差 {tolerance:.2e}")
+            logger.debug(f"Vertex off the plane by {distance:.2e} > tolerance {tolerance:.2e}")
             return False
 
-    logger.debug(f"所有 {len(vertices)} 个顶点都在同一平面上")
+    logger.debug(f"All {len(vertices)} vertices lie on one plane")
     return True
 
 
 def check_shell_meshes(mjcf_path: Path) -> None:
-    """
-    检查MJCF文件中的所有mesh，如果顶点全部共面则添加inertia="shell"属性。
+    """Set inertia="shell" on every mesh asset whose vertices are all coplanar.
 
     Args:
-        mjcf_path: MJCF文件路径
+        mjcf_path: Path to the MJCF file.
     """
-    logger.info(f"检查 {mjcf_path} 中的mesh是否为shell...")
+    logger.info(f"Checking {mjcf_path} for shell meshes...")
 
     try:
         tree = ET.parse(mjcf_path)
         root = tree.getroot()
 
-        # 找到assets元素
         asset_elem = root.find("asset")
         if asset_elem is None:
-            logger.info("未找到asset元素，跳过shell检查")
+            logger.info("No asset element found, skipping the shell check")
             return
 
-        # 获取mjcf文件所在目录，用于解析相对路径
         mjcf_dir = mjcf_path.parent
 
-        # 检查compiler设置的meshdir
+        # Mesh paths resolve against the compiler meshdir
         compiler_elem = root.find("compiler")
         mesh_dir = mjcf_dir
         if compiler_elem is not None:
@@ -154,55 +146,50 @@ def check_shell_meshes(mjcf_path: Path) -> None:
 
         modified = False
 
-        # 检查所有mesh元素
         for mesh_elem in asset_elem.findall("mesh"):
             mesh_name = mesh_elem.get("name", "")
             mesh_file = mesh_elem.get("file", "")
 
             if not mesh_file:
-                logger.debug(f"Mesh {mesh_name} 没有file属性，跳过")
+                logger.debug(f"Mesh {mesh_name} has no file attribute, skipping")
                 continue
 
-            # 检查是否已经有inertia属性
+            # An explicit inertia already on the asset is left alone
             if mesh_elem.get("inertia") is not None:
-                logger.debug(f"Mesh {mesh_name} 已经有inertia属性，跳过")
+                logger.debug(f"Mesh {mesh_name} already has an inertia attribute, skipping")
                 continue
 
-            # 解析mesh文件路径
             mesh_path = mesh_dir / mesh_file
 
-            # 读取顶点
             vertices = read_mesh_vertices(mesh_path)
             if vertices is None:
-                logger.debug(f"无法读取mesh文件 {mesh_file}，跳过")
+                logger.debug(f"Could not read mesh file {mesh_file}, skipping")
                 continue
 
-            # 检查是否共面
             if check_coplanar(vertices):
-                logger.info(f"Mesh {mesh_name} ({mesh_file}) 的顶点全部共面，添加 inertia='shell'")
+                logger.info(f"Mesh {mesh_name} ({mesh_file}) is coplanar, setting inertia='shell'")
                 mesh_elem.set("inertia", "shell")
                 modified = True
             else:
-                logger.debug(f"Mesh {mesh_name} ({mesh_file}) 的顶点不全共面，保持默认inertia")
+                logger.debug(f"Mesh {mesh_name} ({mesh_file}) is not coplanar, keeping the default inertia")
 
-        # 如果有修改，保存文件
         if modified:
             save_xml(mjcf_path, tree)
-            logger.info(f"已更新 {mjcf_path} 中的shell mesh属性")
+            logger.info(f"Updated shell mesh attributes in {mjcf_path}")
         else:
-            logger.info("没有发现需要设置为shell的mesh")
+            logger.info("No mesh needed a shell inertia")
 
     except Exception as e:
-        logger.error(f"检查shell mesh时出错: {e}")
+        logger.error(f"Failed to check for shell meshes: {e}")
 
 
 def main() -> None:
-    """命令行入口函数。"""
+    """Command-line entry point."""
     import argparse
 
-    parser = argparse.ArgumentParser(description="检查MJCF文件中的mesh是否为shell")
-    parser.add_argument("mjcf_path", type=str, help="MJCF文件路径")
-    parser.add_argument("--log-level", type=int, default=logging.INFO, help="日志级别")
+    parser = argparse.ArgumentParser(description="Mark coplanar meshes in an MJCF file as shell")
+    parser.add_argument("mjcf_path", type=str, help="Path to the MJCF file.")
+    parser.add_argument("--log-level", type=int, default=logging.INFO, help="The log level to use.")
 
     args = parser.parse_args()
 
