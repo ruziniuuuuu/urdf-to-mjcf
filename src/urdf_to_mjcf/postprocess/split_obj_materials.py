@@ -235,6 +235,7 @@ def process_obj_materials(
                 logger.info(f"Splitting OBJ file {obj_file.name} by materials in: {obj_target_dir}")
                 # Multiple submeshes, save each one separately
                 logger.info(f"Splitting OBJ into {len(mesh.geometry)} submeshes by material")
+                files_before_export = set(obj_target_dir.iterdir())
                 for i, (material_name, geom) in enumerate(mesh.geometry.items()):
                     submesh_name = obj_target_dir / f"{obj_stem}_{i}.obj"
                     scoped_material_name = make_obj_material_name(obj_file, material_name, base_dir=base_dir)
@@ -253,9 +254,17 @@ def process_obj_materials(
                     geom.export(submesh_name.as_posix(), **export_kwargs)
                     if submesh_materials is not None and scoped_material_name in materials:
                         submesh_materials[submesh_name.resolve()] = scoped_material_name
-                    # Mark files for deletion instead of deleting immediately
-                    files_to_delete.append(obj_target_dir / submesh_mtl_file)
                     logger.info(f"Saved submesh: {submesh_name.name} (material: {material_name})")
+
+                # Exporting with textures also writes an MTL and a copy of every
+                # image it references. The MJCF carries materials and textures
+                # itself and points at the source images, so these copies are
+                # byproducts. Only files this export created are removed, leaving
+                # any pre-existing asset in the directory untouched.
+                for byproduct in sorted(set(obj_target_dir.iterdir()) - files_before_export):
+                    if byproduct.is_file() and byproduct.suffix.lower() != ".obj":
+                        files_to_delete.append(byproduct)
+
                 # Mark original files for deletion
                 files_to_delete.append(obj_file)
                 files_to_delete.append(mtl_file)

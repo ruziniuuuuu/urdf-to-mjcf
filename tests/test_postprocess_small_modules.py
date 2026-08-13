@@ -430,6 +430,71 @@ def test_split_obj_by_materials_uses_split_time_submesh_material_mapping(tmp_pat
     assert root.find("./asset/material[@name='mtl_meshes_part_blue']") is not None
 
 
+def test_split_obj_by_materials_leaves_no_texture_byproducts(tmp_path) -> None:
+    from PIL import Image
+
+    mesh_dir = tmp_path / "meshes"
+    mesh_dir.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (2, 2), (10, 20, 30)).save(mesh_dir / "skin.png")
+    obj_path = write_text(
+        mesh_dir / "part.obj",
+        "\n".join(
+            [
+                "mtllib part.mtl",
+                "v 0 0 0",
+                "v 1 0 0",
+                "v 0 1 0",
+                "v 0 0 1",
+                "vt 0 0",
+                "vt 1 0",
+                "vt 0 1",
+                "vt 1 1",
+                "usemtl skinned",
+                "f 1/1 2/2 3/3",
+                "usemtl plain",
+                "f 1/1 3/3 4/4",
+            ]
+        ),
+    )
+    write_text(
+        obj_path.with_suffix(".mtl"),
+        "\n".join(
+            [
+                "newmtl skinned",
+                "Kd 1 1 1",
+                "map_Kd skin.png",
+                "newmtl plain",
+                "Kd 0 0 1",
+            ]
+        ),
+    )
+    mjcf_path = write_text(
+        tmp_path / "model.xml",
+        """
+        <mujoco>
+          <compiler meshdir='.' />
+          <asset>
+            <mesh name='part' file='meshes/part.obj' />
+          </asset>
+          <worldbody>
+            <body name='body'>
+              <geom name='part_visual' class='visual' type='mesh' mesh='part' />
+            </body>
+          </worldbody>
+        </mujoco>
+        """.strip(),
+    )
+
+    split_obj_by_materials(mjcf_path)
+
+    split_dir = mesh_dir / "part"
+    leftovers = sorted(path.name for path in split_dir.iterdir() if path.suffix.lower() != ".obj")
+    assert leftovers == []
+    assert sorted(path.name for path in split_dir.glob("*.obj"))
+    # The source image the MJCF texture points at must survive.
+    assert (mesh_dir / "skin.png").exists()
+
+
 def test_material_compactors_preserve_source_scoped_mtl_materials(tmp_path) -> None:
     mjcf_path = write_text(
         tmp_path / "model.xml",
