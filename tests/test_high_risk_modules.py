@@ -20,6 +20,7 @@ from urdf_to_mjcf.core.model import (
 from urdf_to_mjcf.postprocess.add_sensors import add_sensors
 from urdf_to_mjcf.postprocess.collisions import update_collisions
 from urdf_to_mjcf.postprocess.convex_collision import convex_collision_assets
+from urdf_to_mjcf.postprocess.convex_collision import process_single_mesh as convex_hull_worker
 from urdf_to_mjcf.postprocess.convex_decomposition import convex_decomposition_assets
 
 
@@ -98,6 +99,29 @@ def test_convex_collision_assets_replaces_collision_geom(tmp_path, monkeypatch) 
     assert root.find(".//asset/mesh[@name='arm_mesh_convex']") is not None
     assert root.find(".//body[@name='arm']/geom[@mesh='arm_mesh_convex']") is not None
     assert root.find(".//body[@name='arm']/geom[@name='arm_collision']") is None
+
+
+def test_convex_hull_worker_writes_the_hull_beside_its_source_mesh(tmp_path) -> None:
+    mesh_dir = tmp_path / "meshes" / "leg"
+    mesh_dir.mkdir(parents=True)
+    # Two disjoint boxes, so the hull is genuinely different from the source.
+    trimesh.util.concatenate(
+        [
+            trimesh.creation.box(extents=(1, 1, 1)),
+            trimesh.creation.box(
+                extents=(1, 1, 1),
+                transform=trimesh.transformations.translation_matrix((3, 0, 0)),
+            ),
+        ]
+    ).export(mesh_dir / "shin.obj")
+
+    result = convex_hull_worker(("shin_mesh", "meshes/leg/shin.obj", tmp_path))
+
+    # The part path is relative to meshdir and keeps the source directory layout.
+    assert result == ("shin_mesh", [("shin_convex", "meshes/leg/shin_convex/shin_convex.stl")])
+    hull = trimesh.load(mesh_dir / "shin_convex" / "shin_convex.stl", force="mesh")
+    assert isinstance(hull, trimesh.Trimesh)
+    assert hull.is_convex
 
 
 def test_convex_decomposition_assets_splits_collision_geom(tmp_path, monkeypatch) -> None:
