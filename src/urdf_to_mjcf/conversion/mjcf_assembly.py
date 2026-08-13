@@ -10,13 +10,27 @@ from pathlib import Path
 
 from urdf_to_mjcf.core.geometry import ParsedJointParams
 from urdf_to_mjcf.core.materials import Material
-from urdf_to_mjcf.core.model import ActuatorMetadata, ConversionMetadata, DefaultJointMetadata
+from urdf_to_mjcf.core.model import ActuatorConfig, ConversionMetadata, JointMetadata
 
 logger = logging.getLogger(__name__)
 
 ROBOT_CLASS = "robot"
 
 MimicConstraint = tuple[str, str, float, float]
+
+
+def _actuator_attributes(metadata: ActuatorConfig) -> dict[str, str]:
+    """Serialize a joint's actuator configuration."""
+    attributes = {name: str(value) for name in ("kp", "kv", "gear") if (value := getattr(metadata, name)) is not None}
+    for name in ("ctrllimited", "forcelimited"):
+        value = getattr(metadata, name)
+        if value is not None:
+            attributes[name] = "true" if value else "false"
+    for name in ("ctrlrange", "forcerange"):
+        value = getattr(metadata, name)
+        if value is not None and len(value) == 2:
+            attributes[name] = f"{value[0]} {value[1]}"
+    return attributes
 
 
 # ---------------------------------------------------------------------------
@@ -34,8 +48,6 @@ def add_compiler(root: ET.Element) -> None:
         "angle": "radian",
         "meshdir": ".",
         "balanceinertia": "true",
-        # "eulerseq": "zyx",
-        # "autolimits": "true",
     }
 
     element = ET.Element("compiler", attrib=attrib)
@@ -48,50 +60,12 @@ def add_compiler(root: ET.Element) -> None:
 def add_default(
     root: ET.Element,
     metadata: ConversionMetadata,
-    default_metadata: Mapping[str, DefaultJointMetadata] | None = None,
     collision_only: bool = False,
 ) -> None:
     """Add default settings with hierarchical structure for robot components."""
     default = ET.Element("default")
 
     robot_default = ET.SubElement(default, "default", attrib={"class": ROBOT_CLASS})
-
-    if default_metadata is not None:
-        for class_name, class_metadata in default_metadata.items():
-            sub_default = ET.SubElement(robot_default, "default", attrib={"class": str(class_name)})
-            joint_attrib = {}
-            c_joint = class_metadata.joint
-            if c_joint.stiffness is not None:
-                joint_attrib["stiffness"] = str(c_joint.stiffness)
-            if c_joint.actuatorfrcrange is not None and len(c_joint.actuatorfrcrange) == 2:
-                joint_attrib["actuatorfrcrange"] = f"{c_joint.actuatorfrcrange[0]} {c_joint.actuatorfrcrange[1]}"
-            if c_joint.margin is not None:
-                joint_attrib["margin"] = str(c_joint.margin)
-            if c_joint.armature is not None:
-                joint_attrib["armature"] = str(c_joint.armature)
-            if c_joint.damping is not None:
-                joint_attrib["damping"] = str(c_joint.damping)
-            if c_joint.frictionloss is not None:
-                joint_attrib["frictionloss"] = str(c_joint.frictionloss)
-            ET.SubElement(sub_default, "joint", attrib=joint_attrib)
-
-            c_actuator = class_metadata.actuator
-            if c_actuator.actuator_type is None:
-                continue
-
-            actuator_attrib = {}
-            if c_actuator.kp is not None:
-                actuator_attrib["kp"] = str(c_actuator.kp)
-            if c_actuator.kv is not None:
-                actuator_attrib["kv"] = str(c_actuator.kv)
-            if c_actuator.gear is not None:
-                actuator_attrib["gear"] = str(c_actuator.gear)
-            if c_actuator.ctrlrange is not None and len(c_actuator.ctrlrange) == 2:
-                actuator_attrib["ctrlrange"] = f"{c_actuator.ctrlrange[0]} {c_actuator.ctrlrange[1]}"
-            if c_actuator.forcerange is not None:
-                actuator_attrib["forcerange"] = f"{c_actuator.forcerange[0]} {c_actuator.forcerange[1]}"
-
-            ET.SubElement(sub_default, c_actuator.actuator_type, attrib=actuator_attrib)
 
     # Visual geometry class
     if not collision_only:
@@ -257,11 +231,7 @@ def add_assets(root: ET.Element, materials: dict[str, str], mtl_materials: dict[
     # Add MTL materials first (they take priority)
     if mtl_materials:
         for material in mtl_materials.values():
-            material_attrib = {
-                "name": material.name,
-                # "specular": material.mjcf_specular(),
-                # "shininess": material.mjcf_shininess(),
-            }
+            material_attrib = {"name": material.name}
 
             if material.map_Kd is not None:
                 # Create texture asset for diffuse map
@@ -317,47 +287,47 @@ def add_assets(root: ET.Element, materials: dict[str, str], mtl_materials: dict[
 
 def add_actuators(
     root: ET.Element,
-    actuator_joints: Sequence[ParsedJointParams],
-    actuator_metadata: Mapping[str, ActuatorMetadata],
+    movable_joints: Sequence[ParsedJointParams],
+    joint_metadata: Mapping[str, JointMetadata],
 ) -> None:
-    """Add ordered actuator elements to the MJCF root."""
+    """Add actuators declared by joint metadata, preserving joint-data order."""
     actuator_elem = ET.SubElement(root, "actuator")
-    actuator_order = list(actuator_metadata)
+    available_joints = {joint.name for joint in movable_joints}
 
-    for actuator_joint in actuator_joints:
-        metadata = actuator_metadata.get(actuator_joint.name)
-        if metadata is None:
-            logger.info("Actuator %s not found in actuator_metadata", actuator_joint.name)
+    for joint_name, metadata in joint_metadata.items():
+        actuator = metadata.actuator
+        if actuator is None or actuator.actuator_type is None:
+            continue
+        if joint_name not in available_joints:
+            logger.info("Joint %s not found in converted joints", joint_name)
             continue
 
-        attrib: dict[str, str] = {"joint": actuator_joint.name}
-        actuator_type = metadata.actuator_type or "motor"
-        logger.info("Joint %s assigned to class: %s", actuator_joint.name, actuator_type)
+        attrib = {"joint": joint_name, **_actuator_attributes(actuator)}
 
-        if metadata.joint_class is not None:
-            attrib["class"] = str(metadata.joint_class)
-            logger.info("Joint %s assigned to class: %s", actuator_joint.name, metadata.joint_class)
-        if metadata.kp is not None:
-            attrib["kp"] = str(metadata.kp)
-        if metadata.kv is not None:
-            attrib["kv"] = str(metadata.kv)
-        if metadata.ctrlrange is not None:
-            attrib["ctrlrange"] = f"{metadata.ctrlrange[0]} {metadata.ctrlrange[1]}"
-        if metadata.forcerange is not None:
-            attrib["forcerange"] = f"{metadata.forcerange[0]} {metadata.forcerange[1]}"
-        if metadata.gear is not None:
-            attrib["gear"] = str(metadata.gear)
+        logger.info("Creating %s actuator for joint %s", actuator.actuator_type, joint_name)
+        ET.SubElement(actuator_elem, actuator.actuator_type, attrib={"name": joint_name, **attrib})
 
-        logger.info("Creating actuator %s with class: %s", actuator_joint.name, actuator_type)
-        ET.SubElement(actuator_elem, actuator_type, attrib={"name": actuator_joint.name, **attrib})
 
-    actuator_children = [child for child in list(actuator_elem) if child.attrib["joint"] in actuator_metadata]
-    actuator_children.sort(key=lambda elem: actuator_order.index(elem.attrib["joint"]))
+def add_joint_sensors(
+    root: ET.Element,
+    joint_metadata: Mapping[str, JointMetadata],
+    available_joints: Sequence[ParsedJointParams],
+) -> None:
+    """Add joint sensors described by joint metadata."""
+    available_joint_names = {joint.name for joint in available_joints}
+    sensor_joints = [
+        joint_name
+        for joint_name, metadata in joint_metadata.items()
+        if metadata.sensors is not None and metadata.sensors.jointvel and joint_name in available_joint_names
+    ]
+    if not sensor_joints:
+        return
 
-    for child in actuator_children:
-        actuator_elem.remove(child)
-    for child in actuator_children:
-        actuator_elem.append(child)
+    sensor_elem = root.find("sensor")
+    if sensor_elem is None:
+        sensor_elem = ET.SubElement(root, "sensor")
+    for joint_name in sensor_joints:
+        ET.SubElement(sensor_elem, "jointvel", attrib={"name": f"vel_{joint_name}", "joint": joint_name})
 
 
 def add_mimic_equality_constraints(root: ET.Element, mimic_constraints: Sequence[MimicConstraint]) -> None:

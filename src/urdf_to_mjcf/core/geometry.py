@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+import trimesh
 
 logger = logging.getLogger(__name__)
 
@@ -36,30 +37,24 @@ class GeomElement:
     mesh: str | None = None
 
 
-# 将数值格式化为最多保留4位小数，去除末尾的多余0和小数点，且将 -0 统一为 0
+# Magnitudes below this are trigonometric noise, not geometry: cos(pi / 2) is
+# 6.1e-17 rather than 0. Snapping them keeps quaternions readable and keeps
+# scientific notation out of the MJCF, since the fixed format below resolves
+# exactly this far.
+ZERO_TOLERANCE = 1e-12
+
+
 def format_value(val: float) -> str:
-    """格式化数值为字符串。
+    """Format a float for MJCF output, keeping 12 decimals of precision.
 
-    行为：
-    - 使用四位小数精度进行四舍五入。
-    - 删除末尾多余的零。
-    - 若结果以小数点结尾则删除小数点。
-    - 将 "-0" 或 "-0.0000" 规范为 "0"。
-
-    Args:
-        val: 要格式化的浮点数。
-
-    Returns:
-        处理后的字符串表示。
+    Trailing zeros and a trailing decimal point are stripped, and magnitudes
+    within ZERO_TOLERANCE of zero — including -0.0 — become "0".
     """
-    # 先用四位小数进行格式化（确保四舍五入）
-    formatted = f"{val:.4f}"
-    # 去除末尾的零
+    if abs(val) < ZERO_TOLERANCE:
+        return "0"
+    formatted = f"{val:.12f}"
     if "." in formatted:
         formatted = formatted.rstrip("0").rstrip(".")
-    # 规范 -0 -> 0
-    if formatted in ("-0", "-0.0", "-0.00", "-0.000", "-0.0000", ""):
-        return "0"
     return formatted
 
 
@@ -257,12 +252,6 @@ def _primitive_min_z(geom_type: str, size_vals: list[float], total_tf: list[list
 
 def _load_mesh_vertices(mesh_file_path: Path, scale_str: str | None = None) -> np.ndarray:
     """Load mesh vertices with optional scale applied."""
-    try:
-        import trimesh
-    except ImportError:
-        logger.warning("trimesh not available, using fallback for mesh min_z computation")
-        return np.empty((0, 3), dtype=float)
-
     if not mesh_file_path.exists():
         logger.warning(f"compute mesh z min: Mesh file not found: {mesh_file_path}")
         return np.empty((0, 3), dtype=float)
@@ -299,31 +288,12 @@ def _load_mesh_vertices(mesh_file_path: Path, scale_str: str | None = None) -> n
         return np.empty((0, 3), dtype=float)
 
 
-def _compute_mesh_min_z(mesh_file_path: Path, scale_str: str | None = None) -> float:
-    """Compute the minimum Z value from a mesh file.
-
-    Args:
-        mesh_file_path: Full path to the mesh file.
-        scale_str: Optional scale string (e.g., "1 1 1").
-
-    Returns:
-        The minimum Z value in the mesh's local frame.
-    """
-    vertices = _load_mesh_vertices(mesh_file_path, scale_str)
-    if vertices.size == 0:
-        return 0.0
-
-    min_z = float(vertices[:, 2].min())
-    logger.info(f"Computed min_z for mesh '{mesh_file_path.name}': {min_z}")
-    return min_z
-
-
 def rpy_to_quat(rpy_str: str) -> str:
     """Convert roll, pitch, yaw angles (in radians) to a quaternion (w, x, y, z)."""
-    try:
-        r, p, y = map(float, rpy_str.split())
-    except Exception:
-        r, p, y = 0.0, 0.0, 0.0
+    values = [float(v) for v in rpy_str.split()]
+    if len(values) != 3:
+        raise ValueError(f"Expected three rpy values, got {rpy_str!r}")
+    r, p, y = values
     cy = math.cos(y * 0.5)
     sy = math.sin(y * 0.5)
     cp = math.cos(p * 0.5)

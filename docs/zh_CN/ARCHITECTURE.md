@@ -45,6 +45,15 @@ urdf-to-mjcf/
 4. **输出** (`conversion/output.py`)：调整机器人高度，保存初始 MJCF，分发后处理。
 5. **后处理** (`postprocess/`)：光源、网格转换（DAE/GLB→OBJ）、材质拆分、简化、地面、传感器等。
 
+## 元数据流
+
+CLI 明确区分两条配置路径：
+
+- `ConversionMetadata` 负责场景级转换设置。
+- `JointData` 负责分组的 MJCF-only 关节，以及逐关节动力学、执行器和速度传感器。
+
+`JointData` 是 CLI seam 上唯一的关节配置 interface。`conversion/pipeline.py` 只解析一次并写入 `ConversionContext`；Body 构建和 MJCF 组装消费同一对象，不再维护并行的 joint/default/actuator 映射。未提供 joint data 时，resolver 会为 URDF 中的可动关节生成默认 motor 记录；精确行为见[元数据参考](./METADATA_REFERENCE.md)。
+
 ## 分层依赖
 
 ```

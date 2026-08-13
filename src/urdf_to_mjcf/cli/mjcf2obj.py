@@ -342,8 +342,8 @@ def _export_body(
     if geoms:
         safe_body_name = _sanitize_name(body_name, "body", body_name_usage)
 
-        # 保持原有的文件路径结构：将导出文件放在 output_dir 下，
-        # 并附加所有来源 mesh 文件在 mesh_root 下的共同相对子目录。
+        # Keep the source layout: exports go under output_dir, with the
+        # subdirectory the source meshes share below mesh_root appended.
         source_paths: List[Path] = [g["mesh_path"] for g in geoms]
         common_rel = _common_relative_dir(source_paths, mesh_root)
         target_dir = (output_dir / common_rel).resolve()

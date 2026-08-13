@@ -39,41 +39,40 @@ def dae2obj(dae_path: str | Path, obj_path: str | Path):
         raise
 
     if isinstance(mesh_data, trimesh.Scene):
-        # 收集所有唯一的材质
+        # Collect the unique materials
         unique_materials = {}
         geom_to_material = {}
 
         for id, geom in mesh_data.geometry.items():
-            # 获取材质对象并提取其名称
+            # Take the material object and its name
             material_obj = id2dae_goem[id].primitives[0].material
             material_name = material_obj.id if hasattr(material_obj, "id") else str(material_obj)
 
-            # 记录几何体到材质的映射
+            # Record the geometry-to-material mapping
             geom_to_material[id] = material_name
 
-            # 收集唯一材质
             if material_name not in unique_materials:
                 unique_materials[material_name] = material_obj
 
-            # 设置材质名称
+            # Name the material after the DAE material
             geom.visual.material.name = material_name
 
-        # 先导出，然后分析trimesh分配的材质名称
+        # Export first, then read back the material names trimesh assigned
         export_kwargs: dict[str, Any] = {"mtl_name": mtl_name}
         mesh_data.export(str(obj_path), **export_kwargs)
 
-        # 从导出的文件中分析trimesh的材质分配
+        # Recover trimesh's assignment from the exported files
         material_mapping = {}
         if mtl_path.exists():
             with open(str(mtl_path), "r") as f:
                 mtl_content = f.read()
 
-            # 从OBJ文件中分析每个几何体使用的材质
+            # Find which material each geometry uses
             if obj_path.exists():
                 with open(str(obj_path), "r") as f:
                     obj_content = f.read()
 
-                # 解析OBJ文件找到几何体名称和使用的材质
+                # Parse geometry names and their materials out of the OBJ
                 lines = obj_content.split("\n")
                 current_geom = None
                 for line in lines:
@@ -85,14 +84,14 @@ def dae2obj(dae_path: str | Path, obj_path: str | Path):
                             actual_material = geom_to_material[current_geom]
                             material_mapping[trimesh_material] = actual_material
 
-            # 修改 MTL 文件中的材质名称
+            # Rename the materials in the MTL
             for old_name, new_name in material_mapping.items():
                 mtl_content = mtl_content.replace(f"newmtl {old_name}", f"newmtl {new_name}")
 
             with open(str(mtl_path), "w") as f:
                 f.write(mtl_content)
 
-        # 修改 OBJ 文件中的材质引用
+        # Retarget the material references in the OBJ
         if obj_path.exists():
             with open(str(obj_path), "r") as f:
                 obj_content = f.read()
@@ -127,13 +126,6 @@ def glb2obj(glb_path: str | Path, obj_path: str | Path) -> None:
         logger.error(f"Failed to load GLB file {glb_path}: {e}")
         raise
 
-    mtl_path = obj_path.with_suffix(".mtl")
-    mtl_name = mtl_path.name
-    export_kwargs: dict[str, Any] = {"mtl_name": mtl_name}
-
-    if isinstance(mesh_data, trimesh.Scene):
-        mesh_data.export(str(obj_path), **export_kwargs)
-    else:
-        mesh_data.export(str(obj_path), **export_kwargs)
-
+    export_kwargs: dict[str, Any] = {"mtl_name": obj_path.with_suffix(".mtl").name}
+    mesh_data.export(str(obj_path), **export_kwargs)
     logger.info(f"Successfully converted GLB to OBJ: {obj_path}")

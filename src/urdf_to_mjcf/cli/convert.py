@@ -8,10 +8,8 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import traceback
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Sequence
 from pathlib import Path
-from typing import TypeVar
 
 from urdf_to_mjcf.conversion.input import load_conversion_inputs
 from urdf_to_mjcf.conversion.mjcf_assembly import add_weld_constraints
@@ -21,60 +19,33 @@ from urdf_to_mjcf.conversion.output import (
     save_initial_mjcf_and_apply_postprocess,
 )
 from urdf_to_mjcf.conversion.pipeline import assemble_robot_scene, build_conversion_context
-from urdf_to_mjcf.core.model import ActuatorMetadata, DefaultJointMetadata
+from urdf_to_mjcf.core.model import JointData
 
 logger = logging.getLogger(__name__)
-
-T = TypeVar("T")
-
 
 # ---------------------------------------------------------------------------
 # CLI helpers (from conversion_cli.py)
 # ---------------------------------------------------------------------------
 
 
-def _load_metadata_files(
-    metadata_files: Sequence[str] | None,
-    *,
-    label: str,
-    parser: Callable[[dict], T],
-) -> dict[str, T] | None:
-    """Load keyed metadata from one or more JSON files."""
-    loaded: dict[str, T] = {}
-    if not metadata_files:
+def load_joint_data_files(joint_data_files: Sequence[str] | None) -> JointData | None:
+    """Load and merge joint data files from CLI arguments."""
+    if not joint_data_files:
         return None
 
-    for metadata_file in metadata_files:
+    extra_joints = []
+    joints = {}
+    for joint_data_file in joint_data_files:
         try:
-            with open(metadata_file, "r") as f:
-                file_metadata = json.load(f)
-            for key, value in file_metadata.items():
-                loaded[key] = parser(value)
-            logger.info("Loaded %s metadata from %s", label, metadata_file)
+            with open(joint_data_file, "r") as file:
+                joint_data = JointData(**json.load(file))
         except Exception as exc:
-            logger.warning("Failed to load %s metadata from %s: %s", label, metadata_file, exc)
-            traceback.print_exc()
+            logger.exception("Failed to load joint data from %s: %s", joint_data_file, exc)
             raise SystemExit(1) from exc
-
-    return loaded or None
-
-
-def load_default_metadata_files(metadata_files: Sequence[str] | None) -> dict[str, DefaultJointMetadata] | None:
-    """Load default metadata files from CLI arguments."""
-    return _load_metadata_files(
-        metadata_files,
-        label="default",
-        parser=DefaultJointMetadata.from_dict,
-    )
-
-
-def load_actuator_metadata_files(metadata_files: Sequence[str] | None) -> dict[str, ActuatorMetadata] | None:
-    """Load actuator metadata files from CLI arguments."""
-    return _load_metadata_files(
-        metadata_files,
-        label="actuator",
-        parser=ActuatorMetadata.from_dict,
-    )
+        logger.info("Loaded joint data from %s", joint_data_file)
+        extra_joints.extend(joint_data.extra_joints)
+        joints.update(joint_data.joints)
+    return JointData(extra_joints=extra_joints, joints=joints)
 
 
 def normalize_appendix_files(appendix_files: Sequence[str] | None) -> list[Path] | None:
@@ -94,12 +65,13 @@ def convert_urdf_to_mjcf(
     mjcf_path: str | Path | None = None,
     metadata_file: str | Path | None = None,
     *,
-    default_metadata: Mapping[str, DefaultJointMetadata] | None = None,
-    actuator_metadata: dict[str, ActuatorMetadata] | None = None,
+    joint_data: JointData | None = None,
     appendix_files: list[Path] | None = None,
     max_vertices: int = 1000000,
     collision_only: bool = False,
     collision_type: str | None = None,
+    freejoint: bool | None = None,
+    add_floor: bool | None = None,
     capture_images: bool = False,
     run_mesh_postprocess: bool = True,
 ) -> None:
@@ -109,12 +81,13 @@ def convert_urdf_to_mjcf(
         urdf_path: The path to the URDF file.
         mjcf_path: The desired output MJCF file path.
         metadata_file: Optional path to metadata file.
-        default_metadata: Optional default metadata.
-        actuator_metadata: Optional actuator metadata.
+        joint_data: Optional extra joints and per-joint dynamics, actuator, and sensor settings.
         appendix_files: Optional list of appendix files.
         max_vertices: Maximum number of vertices in the mesh.
         collision_only: If true, use simplified collision geometry without visual appearance for visual representation.
         collision_type: The type of collision geometry to use.
+        freejoint: Optional CLI override for base freejoint generation.
+        add_floor: Optional CLI override for floor generation.
         capture_images: If true, capture rendered preview images after conversion.
         run_mesh_postprocess: If false, skip the heavy mesh post-processing pipeline.
     """
@@ -126,11 +99,15 @@ def convert_urdf_to_mjcf(
     )
     if inputs.output_warning is not None:
         print(f"\033[33m{inputs.output_warning}\033[0m")
+    metadata = inputs.metadata
+    if freejoint is not None:
+        metadata.freejoint = freejoint
+    if add_floor is not None:
+        metadata.add_floor = add_floor
     context = build_conversion_context(
         inputs.robot,
-        metadata=inputs.metadata,
-        default_metadata=default_metadata,
-        actuator_metadata=actuator_metadata,
+        metadata=metadata,
+        joint_data=joint_data,
         collision_only=collision_only,
     )
     scene = assemble_robot_scene(
@@ -142,21 +119,19 @@ def convert_urdf_to_mjcf(
         materials=inputs.materials,
     )
 
-    # add_contact(mjcf_root, robot)
-
     # Add weld constraints if specified in metadata
-    add_weld_constraints(context.mjcf_root, inputs.metadata)
+    add_weld_constraints(context.mjcf_root, metadata)
 
     adjust_robot_body_height(
         scene.robot_body,
         mesh_file_paths=scene.mesh_file_paths,
-        height_offset=inputs.metadata.height_offset,
+        height_offset=metadata.height_offset,
     )
     save_initial_mjcf_and_apply_postprocess(
         context.mjcf_root,
         mjcf_path=inputs.mjcf_path,
         options=build_postprocess_options(
-            metadata=inputs.metadata,
+            metadata=metadata,
             collision_only=collision_only,
             collision_type=collision_type,
             max_vertices=max_vertices,
@@ -191,7 +166,6 @@ def main() -> None:
         "-ct",
         "--collision-type",
         type=str,
-        # 保持原样mesh，进行凸分解，进行凸包络
         choices=["mesh", "decomposition", "convex_hull"],
         help="The collision mesh processing mode to use.",
     )
@@ -200,21 +174,26 @@ def main() -> None:
         "--metadata",
         type=str,
         default=None,
-        help="A JSON file containing conversion metadata (joint params and sensors).",
+        help="Advanced conversion metadata JSON. Common add_floor/freejoint options are available as CLI flags.",
     )
     parser.add_argument(
-        "-dm",
-        "--default-metadata",
-        nargs="*",
+        "--freejoint",
+        action=argparse.BooleanOptionalAction,
         default=None,
-        help="JSON files containing default metadata. Multiple files will be merged, with later files overriding earlier ones.",
+        help="Add a MuJoCo freejoint to the root body. Use --no-freejoint for fixed or planar bases.",
     )
     parser.add_argument(
-        "-am",
-        "--actuator-metadata",
-        nargs="*",
+        "--add-floor",
+        action=argparse.BooleanOptionalAction,
         default=None,
-        help="JSON files containing actuator metadata. Multiple files will be merged, with later files overriding earlier ones.",
+        help="Add the default floor geom. Use --no-add-floor to disable it.",
+    )
+    parser.add_argument(
+        "-jd",
+        "--joint-data",
+        nargs="+",
+        default=None,
+        help="JSON files containing grouped MJCF-only joints and per-joint dynamics, actuator, and sensor settings. Multiple files are merged in order.",
     )
     parser.add_argument(
         "-a",
@@ -252,12 +231,13 @@ def main() -> None:
         urdf_path=args.urdf_path,
         mjcf_path=args.output,
         metadata_file=args.metadata,
-        default_metadata=load_default_metadata_files(args.default_metadata),
-        actuator_metadata=load_actuator_metadata_files(args.actuator_metadata),
+        joint_data=load_joint_data_files(args.joint_data),
         appendix_files=normalize_appendix_files(args.appendix),
         max_vertices=args.max_vertices,
         collision_only=args.collision_only,
         collision_type=args.collision_type,
+        freejoint=args.freejoint,
+        add_floor=args.add_floor,
         capture_images=args.capture_images,
         run_mesh_postprocess=not args.skip_mesh_postprocess,
     )

@@ -49,9 +49,10 @@ urdf-to-mjcf <urdf_path> [options]
 
 #### 可选参数
 - `-o, --output`: 输出MJCF文件路径 (默认: URDF 所在目录下的 `output_mjcf/robot.xml`)
-- `-m, --metadata`: 包含转换元数据的JSON文件路径 (关节参数和传感器配置)
-- `-dm, --default-metadata`: 默认元数据JSON文件，可指定多个文件，后面的文件会覆盖前面的设置
-- `-am, --actuator-metadata`: 执行器元数据JSON文件，可指定多个文件，后面的文件会覆盖前面的设置
+- `-m, --metadata`: 高级转换元数据 JSON（地面、相机、碰撞处理等）
+- `--freejoint, --no-freejoint`: 覆盖是否为根 body 添加 MuJoCo 自由关节
+- `--add-floor, --no-add-floor`: 覆盖是否生成默认地面
+- `-jd, --joint-data`: 统一关节数据 JSON，可配置分组的 MJCF-only 关节、逐关节动力学、执行器和关节速度传感器；多个文件按顺序合并
 - `-a, --appendix`: 附加XML文件，可指定多个文件，按顺序应用
 - `--collision-only`: 仅使用碰撞几何体而不显示视觉外观
 - `-ct, --collision-type`: 碰撞网格处理模式。可选值：
@@ -64,10 +65,11 @@ urdf-to-mjcf <urdf_path> [options]
 - `--skip-mesh-postprocess`: 跳过重型 mesh 文件后处理，仅保留轻量 XML 侧后处理步骤
 
 #### 元数据文件说明
-- **metadata**: 主要转换配置文件，包含高度偏移、角度单位、是否添加地面等设置
-- **default-metadata**: 默认关节参数配置，定义关节的默认属性
-- **actuator-metadata**: 执行器配置，定义每个关节的驱动器类型和参数
+- **metadata**: 主要转换配置文件，包含高度偏移、角度单位、地面、碰撞和场景设置
+- **joint-data**: 唯一的关节配置格式，将 MJCF-only 关节分组与逐关节动力学、执行器和关节速度传感器统一在一个结构中
 - **appendix**: 附加的XML内容，会被直接添加到生成的MJCF文件中
+
+完整的 joint-data 结构、默认行为和合并规则请参阅[元数据字段参考](./docs/zh_CN/METADATA_REFERENCE.md)。
 
 ### 使用示例
 
@@ -77,19 +79,24 @@ cd examples/agilex-piper
 urdf-to-mjcf piper.urdf \
   -o mjcf/piper.xml \
   -m metadata/metadata.json \
-  -am metadata/actuator.json \
-  -dm metadata/default.json \
+  -jd metadata/joint_data.json \
   -a metadata/appendix.xml
 # 查看生成的模型
 python -m mujoco.viewer --mjcf=mjcf/piper.xml
+
+# 使用统一关节数据生成无默认地面的固定基座模型
+urdf-to-mjcf robot.urdf \
+  -o mjcf/robot.xml \
+  -jd metadata/base_joints.json metadata/arm_joints.json \
+  --no-freejoint \
+  --no-add-floor
 
 # realman-rm65机械臂
 cd examples/realman-rm65
 urdf-to-mjcf rm65b_eg24c2_description.urdf \
   -o mjcf/rm65.xml \
   -m metadata/metadata.json \
-  -am metadata/actuator.json \
-  -dm metadata/default.json \
+  -jd metadata/joint_data.json \
   -a metadata/appendix.xml
 # 查看生成的模型
 python -m mujoco.viewer --mjcf=mjcf/rm65.xml
@@ -161,6 +168,7 @@ export URDF2MJCF_MODEL_PATH="/workspace/src/robot1_description:/workspace/src/ro
 - [元数据字段参考](./docs/zh_CN/METADATA_REFERENCE.md)
 - [示例教程](./docs/zh_CN/EXAMPLES.md)
 - [常见问题排查](./docs/zh_CN/TROUBLESHOOTING.md)
+- [资产准备脚本](./align_stp/README.md) —— 独立的 CAD/网格准备脚本，不属于已安装的包
 - [贡献指南](./CONTRIBUTING.md)
 
 ## 🤝 致谢

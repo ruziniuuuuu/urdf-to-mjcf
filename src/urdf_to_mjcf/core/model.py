@@ -7,6 +7,27 @@ from pydantic import BaseModel
 
 Angle = Literal["radian", "degree"]
 SiteType = Literal["sphere", "capsule", "ellipsoid", "cylinder", "box"]
+AxisName = Literal["x", "y", "z", "-x", "-y", "-z"]
+
+AXIS_VALUES: dict[str, tuple[float, float, float]] = {
+    "x": (1.0, 0.0, 0.0),
+    "y": (0.0, 1.0, 0.0),
+    "z": (0.0, 0.0, 1.0),
+    "-x": (-1.0, 0.0, 0.0),
+    "-y": (0.0, -1.0, 0.0),
+    "-z": (0.0, 0.0, -1.0),
+}
+
+
+class _StrictModel(BaseModel):
+    """Reject unknown configuration fields on both Pydantic 1 and 2."""
+
+    if hasattr(BaseModel, "model_validate"):
+        model_config = {"extra": "forbid"}
+    else:
+
+        class Config:
+            extra = "forbid"
 
 
 class CollisionParams(BaseModel):
@@ -19,49 +40,34 @@ class CollisionParams(BaseModel):
     friction: list[float] = [1.0, 0.01, 0.01]
 
 
-class dJoint(BaseModel):
+class ActuatorConfig(_StrictModel):
+    """MuJoCo actuator settings nested under one joint record."""
+
+    actuator_type: str | None = None
+    ctrllimited: bool | None = None
+    kp: float | None = None
+    kv: float | None = None
+    gear: float | None = None
+    ctrlrange: tuple[float, float] | None = None
+    forcelimited: bool | None = None
+    forcerange: tuple[float, float] | None = None
+
+
+class JointSensors(_StrictModel):
+    jointvel: bool = False
+
+
+class JointMetadata(_StrictModel):
+    """Dynamics, actuator, and sensor settings for one named joint."""
+
     stiffness: float | None = None
-    actuatorfrcrange: list[float] | None = None
+    actuatorfrcrange: tuple[float, float] | None = None
     margin: float | None = None
     armature: float | None = None
     damping: float | None = None
     frictionloss: float | None = None
-
-
-class dActuator(BaseModel):
-    actuator_type: str | None = None
-    kp: float | None = None
-    kv: float | None = None
-    gear: float | None = None
-    ctrlrange: list[float] | None = None
-    forcerange: list[float] | None = None
-
-
-class DefaultJointMetadata(BaseModel):
-    joint: dJoint
-    actuator: dActuator
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "DefaultJointMetadata":
-        """Create DefaultJointMetadata from a plain dictionary."""
-        joint = dJoint(**data["joint"])
-        actuator = dActuator(**data["actuator"])
-        return cls(joint=joint, actuator=actuator)
-
-
-class ActuatorMetadata(BaseModel):
-    joint_class: str | None = None
-    actuator_type: str | None = None
-    kp: float | None = None
-    kv: float | None = None
-    gear: float | None = None
-    ctrlrange: list[float] | None = None
-    forcerange: list[float] | None = None
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "ActuatorMetadata":
-        """Create JointParam from a plain dictionary."""
-        return cls(**data)
+    actuator: ActuatorConfig | None = None
+    sensors: JointSensors | None = None
 
 
 class SiteMetadata(BaseModel):
@@ -114,13 +120,24 @@ class ExplicitFloorContacts(BaseModel):
     class_name: str = "collision"
 
 
-class ExtraJoint(BaseModel):
-    body_name: str
+class ExtraJoint(_StrictModel):
     name: str
     type: Literal["slide", "hinge"]
-    axis: list[float]
-    joint_class: str | None = None
-    range: list[float] | None = None
+    axis: AxisName
+    range: tuple[float, float] | None = None
+
+    def axis_values(self) -> tuple[float, float, float]:
+        return AXIS_VALUES[self.axis]
+
+
+class ExtraJointGroup(_StrictModel):
+    body: str
+    joints: list[ExtraJoint]
+
+
+class JointData(_StrictModel):
+    extra_joints: list[ExtraJointGroup] = []
+    joints: dict[str, JointMetadata] = {}
 
 
 class WeldConstraint(BaseModel):
@@ -158,8 +175,6 @@ class CollisionGeometry(BaseModel):
 class ConversionMetadata(BaseModel):
     freejoint: bool = True
     collision_params: CollisionParams = CollisionParams()
-    # joint_name_to_metadata: dict[str, ActuatorMetadata] | None = None
-    # actuator_type_to_metadata: dict[str, JointMetadata] | None = None
     imus: list[ImuSensor] = []
     cameras: list[CameraSensor] = [
         CameraSensor(
@@ -182,7 +197,6 @@ class ConversionMetadata(BaseModel):
     touch_sensors: list[TouchSensor] = []
     collision_geometries: list[CollisionGeometry] | None = None
     explicit_contacts: ExplicitFloorContacts | None = None
-    extra_joints: list[ExtraJoint] = []
     weld_constraints: list[WeldConstraint] = []
     remove_redundancies: bool = True
     maxhullvert: int | None = None

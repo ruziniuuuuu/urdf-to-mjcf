@@ -8,7 +8,7 @@ from typing import Any
 import mujoco
 import pytest
 
-from urdf_to_mjcf.cli.convert import convert_urdf_to_mjcf
+from urdf_to_mjcf.cli.convert import convert_urdf_to_mjcf, load_joint_data_files
 
 EXAMPLES_DIR = Path(__file__).resolve().parents[1] / "examples"
 
@@ -44,15 +44,14 @@ EXPECTED_SIGNATURES: dict[str, dict[str, Any]] = {
             "joint5",
             "joint6",
             "joint7",
-            "joint8",
         ],
         "equality_pairs": [("joint7", "joint8")],
         "xml_counts": {
             "body": 9,
             "geom": 38,
             "mesh": 34,
-            "material": 8,
-            "actuator": 8,
+            "material": 26,
+            "actuator": 7,
             "equality": 1,
         },
         "model_counts": {
@@ -98,11 +97,6 @@ EXPECTED_SIGNATURES: dict[str, dict[str, Any]] = {
         ],
         "actuator_names": [
             "gripper_joint1",
-            "gripper_joint2",
-            "gripper_joint3",
-            "gripper_joint4",
-            "gripper_joint5",
-            "gripper_joint6",
             "joint1",
             "joint2",
             "joint3",
@@ -119,17 +113,17 @@ EXPECTED_SIGNATURES: dict[str, dict[str, Any]] = {
         ],
         "xml_counts": {
             "body": 16,
-            "geom": 44,
-            "mesh": 40,
-            "material": 7,
-            "actuator": 12,
+            "geom": 36,
+            "mesh": 32,
+            "material": 11,
+            "actuator": 7,
             "equality": 5,
         },
         "model_counts": {
             "nbody": 17,
             "njnt": 12,
-            "ngeom": 41,
-            "nmesh": 40,
+            "ngeom": 33,
+            "nmesh": 32,
         },
     },
 }
@@ -195,6 +189,7 @@ def test_convert_piper_basic(tmp_dir: Path) -> None:
     robot_dir = EXAMPLES_DIR / "agilex-piper"
     urdf_path = robot_dir / "piper.urdf"
     metadata_path = robot_dir / "metadata" / "metadata.json"
+    joint_data_path = robot_dir / "metadata" / "joint_data.json"
     appendix_path = robot_dir / "metadata" / "appendix.xml"
 
     out_path = tmp_dir / "piper.xml"
@@ -203,6 +198,7 @@ def test_convert_piper_basic(tmp_dir: Path) -> None:
         urdf_path=urdf_path,
         mjcf_path=out_path,
         metadata_file=metadata_path,
+        joint_data=load_joint_data_files([str(joint_data_path)]),
         appendix_files=[appendix_path] if appendix_path.exists() else None,
         max_vertices=200000,
     )
@@ -219,6 +215,7 @@ def test_convert_rm65_with_metadata(tmp_dir: Path) -> None:
     robot_dir = EXAMPLES_DIR / "realman-rm65"
     urdf_path = robot_dir / "rm65b_eg24c2_description.urdf"
     metadata_path = robot_dir / "metadata" / "metadata.json"
+    joint_data_path = robot_dir / "metadata" / "joint_data.json"
     appendix_path = robot_dir / "metadata" / "appendix.xml"
 
     out_path = tmp_dir / "rm65.xml"
@@ -227,6 +224,7 @@ def test_convert_rm65_with_metadata(tmp_dir: Path) -> None:
         urdf_path=urdf_path,
         mjcf_path=out_path,
         metadata_file=metadata_path,
+        joint_data=load_joint_data_files([str(joint_data_path)]),
         appendix_files=[appendix_path] if appendix_path.exists() else None,
         max_vertices=200000,
     )
@@ -241,6 +239,38 @@ def test_convert_rm65_with_metadata(tmp_dir: Path) -> None:
 def test_convert_missing_urdf(tmp_dir: Path) -> None:
     with pytest.raises(FileNotFoundError):
         convert_urdf_to_mjcf(urdf_path=tmp_dir / "nonexistent.urdf")
+
+
+def test_convert_cli_overrides_disable_freejoint_and_floor(tmp_dir: Path) -> None:
+    urdf_path = tmp_dir / "description" / "robot.urdf"
+    urdf_path.parent.mkdir()
+    urdf_path.write_text(
+        """
+        <robot name="fixed">
+          <link name="base_link">
+            <inertial>
+              <mass value="1" />
+              <inertia ixx="1" ixy="0" ixz="0" iyy="1" iyz="0" izz="1" />
+            </inertial>
+            <visual><geometry><box size="1 1 1" /></geometry></visual>
+            <collision><geometry><box size="1 1 1" /></geometry></collision>
+          </link>
+        </robot>
+        """.strip()
+    )
+    out_path = tmp_dir / "mjcf" / "robot.xml"
+
+    convert_urdf_to_mjcf(
+        urdf_path,
+        out_path,
+        freejoint=False,
+        add_floor=False,
+        run_mesh_postprocess=False,
+    )
+
+    root = ET.parse(out_path).getroot()
+    assert root.find(".//freejoint") is None
+    assert root.find(".//geom[@name='floor']") is None
 
 
 def test_default_output_path() -> None:

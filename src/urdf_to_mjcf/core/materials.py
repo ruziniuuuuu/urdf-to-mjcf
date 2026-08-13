@@ -11,16 +11,44 @@ logger = logging.getLogger(__name__)
 
 # MTL fields relevant to MuJoCo
 MTL_FIELDS = (
-    "Ns",  # Shininess / 镜面反射指数
-    "Ka",  # Ambient color / 基础光颜色
-    "Kd",  # Diffuse color / 漫反射颜色
-    "Ks",  # Specular color / 镜面反射颜色
-    "Ke",  # Emissive color / 自发光颜色
-    "Ni",  # Optical density / 折射率
-    "d",  # Transparency (alpha) / 透明度
-    "Tr",  # 1 - transparency / 1 - 透明度
+    "Ns",  # Shininess
+    "Ka",  # Ambient color
+    "Kd",  # Diffuse color
+    "Ks",  # Specular color
+    "Ke",  # Emissive color
+    "Ni",  # Optical density
+    "d",  # Transparency (alpha)
+    "Tr",  # 1 - transparency
     "map_Kd",  # Diffuse texture map
 )
+
+
+def sanitize_mjcf_name(name: str) -> str:
+    """Return a MuJoCo-safe identifier."""
+    sanitized = re.sub(r"[^A-Za-z0-9_]+", "_", name).strip("_")
+    return sanitized or "material"
+
+
+def make_mjcf_material_name(source: str | Path, material_name: str) -> str:
+    """Build a globally unique MJCF material name from a mesh source and raw material name."""
+    source_stem = Path(source).with_suffix("").as_posix()
+    return sanitize_mjcf_name(f"mtl_{source_stem}_{material_name}")
+
+
+def make_obj_material_name(obj_file: Path, material_name: str, *, base_dir: Path | None = None) -> str:
+    """Build a material name scoped by an OBJ path."""
+    source: str | Path = obj_file.name
+    if base_dir is not None:
+        try:
+            source = obj_file.resolve().relative_to(base_dir.resolve())
+        except ValueError:
+            source = obj_file.name
+    return make_mjcf_material_name(source, material_name)
+
+
+def is_source_scoped_mtl_material(name: str | None) -> bool:
+    """Return whether a material name carries source-file identity."""
+    return bool(name and name.startswith("mtl_"))
 
 
 @dataclass
@@ -61,25 +89,6 @@ class Material:
         else:
             alpha = "1.0"
         return f"{Kd} {alpha}"
-
-    def mjcf_shininess(self) -> str:
-        """Convert shininess value to MJCF format."""
-        if self.Ns is not None:
-            f_ns = float(self.Ns)
-            # Normalize Ns value to [0, 1]. Ns values normally range from 0 to 1000.
-            Ns = f_ns / 1_000 if f_ns > 1.0 else f_ns
-        else:
-            Ns = 0.5
-        return f"{Ns}"
-
-    def mjcf_specular(self) -> str:
-        """Convert specular value to MJCF format."""
-        if self.Ks is not None:
-            # Take the average of the specular RGB values.
-            Ks = sum(list(map(float, self.Ks.split(" ")))) / 3
-        else:
-            Ks = 0.5
-        return f"{Ks}"
 
 
 def parse_mtl_name(lines: Sequence[str]) -> Optional[str]:

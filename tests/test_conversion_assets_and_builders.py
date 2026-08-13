@@ -24,10 +24,8 @@ from urdf_to_mjcf.core.materials import Material
 from urdf_to_mjcf.core.model import (
     CollisionParams,
     ConversionMetadata,
-    DefaultJointMetadata,
+    JointMetadata,
     WeldConstraint,
-    dActuator,
-    dJoint,
 )
 
 
@@ -119,8 +117,52 @@ def test_collect_single_obj_materials_extracts_named_material(tmp_path) -> None:
         workspace_search_paths=[],
     )
 
-    assert list(materials) == ["arm_steel"]
-    assert materials["arm_steel"].mjcf_rgba() == "0.1 0.2 0.3 0.5"
+    assert list(materials) == ["mtl_meshes_arm_steel"]
+    assert materials["mtl_meshes_arm_steel"].mjcf_rgba() == "0.1 0.2 0.3 0.5"
+
+
+def test_collect_single_obj_materials_scopes_same_basename_by_source_path(tmp_path) -> None:
+    arm_obj = write_text(
+        tmp_path / "meshes" / "arm" / "link3.obj",
+        "\n".join(
+            [
+                "mtllib link3.mtl",
+                "usemtl material_0",
+                "v 0 0 0",
+                "v 1 0 0",
+                "v 0 1 0",
+                "f 1 2 3",
+            ]
+        ),
+    )
+    gripper_obj = write_text(
+        tmp_path / "meshes" / "gripper" / "link3.obj",
+        "\n".join(
+            [
+                "mtllib link3.mtl",
+                "usemtl material_0",
+                "v 0 0 0",
+                "v 1 0 0",
+                "v 0 1 0",
+                "f 1 2 3",
+            ]
+        ),
+    )
+    write_text(arm_obj.with_suffix(".mtl"), "newmtl material_0\nKd 0.1 0.2 0.3\n")
+    write_text(gripper_obj.with_suffix(".mtl"), "newmtl material_0\nKd 0.7 0.8 0.9\n")
+
+    materials = collect_single_obj_materials(
+        {
+            "arm_link3": "meshes/arm/link3.obj",
+            "gripper_link3": "meshes/gripper/link3.obj",
+        },
+        urdf_dir=tmp_path,
+        workspace_search_paths=[],
+    )
+
+    assert sorted(materials) == ["mtl_meshes_arm_link3_material_0", "mtl_meshes_gripper_link3_material_0"]
+    assert materials["mtl_meshes_arm_link3_material_0"].mjcf_rgba() == "0.1 0.2 0.3 1.0"
+    assert materials["mtl_meshes_gripper_link3_material_0"].mjcf_rgba() == "0.7 0.8 0.9 1.0"
 
 
 def test_copy_mesh_assets_copies_obj_and_prunes_missing_geoms(tmp_path) -> None:
@@ -246,7 +288,6 @@ def test_build_robot_body_tree_uses_unique_mesh_assets_for_same_basename(tmp_pat
         "base",
         link_map=link_map,
         parent_map=parent_map,
-        actuator_metadata={},
         collision_only=False,
         materials={},
         mesh_assets=mesh_assets,
@@ -272,6 +313,59 @@ def test_build_robot_body_tree_uses_unique_mesh_assets_for_same_basename(tmp_pat
     assert right_visual.attrib["mesh"] != left_visual.attrib["mesh"]
 
 
+def test_build_robot_body_tree_writes_per_joint_metadata(tmp_path) -> None:
+    link_map = {
+        "base": ET.fromstring("<link name='base' />"),
+        "arm": ET.fromstring("<link name='arm' />"),
+    }
+    parent_map = {
+        "base": [
+            (
+                "arm",
+                ET.fromstring(
+                    """
+                    <joint name='arm_joint' type='revolute'>
+                      <limit lower='-1' upper='1' />
+                      <axis xyz='0 0 1' />
+                    </joint>
+                    """
+                ),
+            )
+        ]
+    }
+
+    body, movable_joints = build_robot_body_tree(
+        "base",
+        link_map=link_map,
+        parent_map=parent_map,
+        collision_only=False,
+        materials={},
+        mesh_assets={},
+        workspace_search_paths=[],
+        urdf_dir=tmp_path,
+        joint_metadata={
+            "arm_joint": JointMetadata(
+                armature=0.001,
+                stiffness=0.05,
+                damping=0.5,
+                frictionloss=0.5,
+                actuatorfrcrange=(-10.0, 10.0),
+            )
+        },
+    )
+
+    joint = body.find(".//joint[@name='arm_joint']")
+    assert joint is not None
+    assert joint.attrib["type"] == "hinge"
+    assert joint.attrib["range"] == "-1 1"
+    assert joint.attrib["armature"] == "0.001"
+    assert joint.attrib["stiffness"] == "0.05"
+    assert joint.attrib["damping"] == "0.5"
+    assert joint.attrib["frictionloss"] == "0.5"
+    assert joint.attrib["actuatorfrcrange"] == "-10.0 10.0"
+    assert [joint.name for joint in movable_joints] == ["arm_joint"]
+
+
 def test_add_compiler_replaces_existing_element() -> None:
     root = ET.fromstring("<mujoco><option /><compiler angle='degree' /></mujoco>")
 
@@ -285,48 +379,19 @@ def test_add_compiler_replaces_existing_element() -> None:
     assert compiler.attrib["balanceinertia"] == "true"
 
 
-def test_add_default_builds_joint_actuator_and_collision_defaults() -> None:
+def test_add_default_builds_visual_and_collision_defaults() -> None:
     root = ET.fromstring("<mujoco><default /></mujoco>")
     metadata = ConversionMetadata(
         collision_params=CollisionParams(contype=7, conaffinity=9),
         maxhullvert=32,
     )
-    default_metadata = {
-        "hinge": DefaultJointMetadata(
-            joint=dJoint(
-                stiffness=1.5,
-                actuatorfrcrange=[-1.0, 1.0],
-                margin=0.02,
-                armature=0.3,
-                damping=0.4,
-                frictionloss=0.1,
-            ),
-            actuator=dActuator(
-                actuator_type="position",
-                kp=30.0,
-                kv=4.0,
-                gear=2.0,
-                ctrlrange=[-0.5, 0.5],
-                forcerange=[-2.0, 2.0],
-            ),
-        )
-    }
+    add_default(root, metadata)
 
-    add_default(root, metadata, default_metadata)
-
-    joint = root.find(".//default[@class='hinge']/joint")
-    actuator = root.find(".//default[@class='hinge']/position")
     visual_geom = root.find(".//default[@class='visual']/geom")
     collision_geom = root.find(".//default[@class='collision']/geom")
     mesh = root.find("./default/mesh")
 
     assert root[0].tag == "default"
-    assert joint is not None
-    assert joint.attrib["stiffness"] == "1.5"
-    assert joint.attrib["actuatorfrcrange"] == "-1.0 1.0"
-    assert actuator is not None
-    assert actuator.attrib["ctrlrange"] == "-0.5 0.5"
-    assert actuator.attrib["forcerange"] == "-2.0 2.0"
     assert visual_geom is not None
     assert visual_geom.attrib["group"] == "2"
     assert collision_geom is not None
