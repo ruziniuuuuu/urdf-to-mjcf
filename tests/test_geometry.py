@@ -16,9 +16,24 @@ from urdf_to_mjcf.core.geometry import (
 
 def test_format_value_basic() -> None:
     assert format_value(1.0) == "1"
-    assert format_value(1.23456) == "1.2346"
+    assert format_value(1.23456) == "1.23456"
     assert format_value(-0.0) == "0"
     assert format_value(0.1000) == "0.1"
+
+
+def test_format_value_keeps_precision_beyond_four_decimals() -> None:
+    assert format_value(0.034366) == "0.034366"
+    assert format_value(math.sqrt(0.5)) == "0.707106781187"
+
+
+def test_format_value_snaps_trigonometric_noise_to_zero() -> None:
+    assert format_value(math.cos(math.pi / 2)) == "0"
+    assert format_value(-6.123233995736766e-17) == "0"
+
+
+def test_format_value_never_uses_scientific_notation() -> None:
+    assert format_value(5e-6) == "0.000005"
+    assert format_value(-1.5e-9) == "-0.0000000015"
 
 
 def test_parse_vector() -> None:

@@ -36,30 +36,24 @@ class GeomElement:
     mesh: str | None = None
 
 
-# 将数值格式化为最多保留4位小数，去除末尾的多余0和小数点，且将 -0 统一为 0
+# Magnitudes below this are trigonometric noise, not geometry: cos(pi / 2) is
+# 6.1e-17 rather than 0. Snapping them keeps quaternions readable and keeps
+# scientific notation out of the MJCF, since the fixed format below resolves
+# exactly this far.
+ZERO_TOLERANCE = 1e-12
+
+
 def format_value(val: float) -> str:
-    """格式化数值为字符串。
+    """Format a float for MJCF output, keeping 12 decimals of precision.
 
-    行为：
-    - 使用四位小数精度进行四舍五入。
-    - 删除末尾多余的零。
-    - 若结果以小数点结尾则删除小数点。
-    - 将 "-0" 或 "-0.0000" 规范为 "0"。
-
-    Args:
-        val: 要格式化的浮点数。
-
-    Returns:
-        处理后的字符串表示。
+    Trailing zeros and a trailing decimal point are stripped, and magnitudes
+    within ZERO_TOLERANCE of zero — including -0.0 — become "0".
     """
-    # 先用四位小数进行格式化（确保四舍五入）
-    formatted = f"{val:.4f}"
-    # 去除末尾的零
+    if abs(val) < ZERO_TOLERANCE:
+        return "0"
+    formatted = f"{val:.12f}"
     if "." in formatted:
         formatted = formatted.rstrip("0").rstrip(".")
-    # 规范 -0 -> 0
-    if formatted in ("-0", "-0.0", "-0.00", "-0.000", "-0.0000", ""):
-        return "0"
     return formatted
 
 
